@@ -1,38 +1,11 @@
-// js/main.js  v3.9.1 hotfix5 full
+// js/main.js  v3.9.1 hotfix6 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
 import { PlayerCore } from "./modules/playerCore.js";
-
-// ★ audioFx は default export / named export どっちでもOKにする
-import * as AudioFxMod from "./modules/audioFx.js";
-
+import AudioFx from "./modules/audioFx.js";                // ★default import決め打ち
 import { PlaylistPersist } from "./modules/playlistPersist.js";
-
-// ★ clamp は main.js内に昔の定義が残ってても衝突しないよう別名import
 import { clamp as _clamp, formatTime, isMp3File } from "./modules/utils.js";
-
-// ===============================
-// AudioFx 解決（named / default 両対応）
-// ===============================
-const AudioFxResolved =
-  AudioFxMod.AudioFx ||
-  AudioFxMod.default ||
-  AudioFxMod.AudioFX ||
-  null;
-
-// フォールバック（AudioFx が無くても再生だけは動く）
-class AudioFxFallback {
-  constructor() {}
-  ensureContext() {}
-  resumeContext() {}
-  attach(audioEl) { return { gain: null }; }
-  applyEqPresetToAll() {}
-  applyNormalizeToCurrent() {}
-  setEqEnabled() {}
-  setNormalizeEnabled() {}
-}
-const AudioFx = AudioFxResolved ?? AudioFxFallback;
 
 // ===============================
 // UI取得（null安全）
@@ -156,7 +129,10 @@ const persist = new PlaylistPersist("mp3PlayerPlaylist_v3");
 const audioFx = new AudioFx(settings);
 const playlist = new Playlist(settings, persist);
 const player = new PlayerCore(ui, playlist, settings, audioFx);
-const visualizer = ui.visualizerCanvas ? new Visualizer(ui.visualizerCanvas, player, settings) : null;
+
+// あなたの visualizer.js のシグネチャに合わせる
+const visualizer = ui.visualizerCanvas ? new Visualizer(ui.visualizerCanvas, settings, audioFx) : null;
+visualizer?.start?.();
 
 // ゴースト復元（再生不能曲が含まれても落ちない）
 playlist.reloadFromPersist?.();
@@ -208,7 +184,6 @@ function forceLoadAndPlay(index) {
     return false;
   }
 
-  // src が無い or 違う曲なら張り直す
   if (!a.src || !a.src.startsWith("blob:") || a.__trackIndex !== index) {
     try {
       const url = URL.createObjectURL(track.file);
@@ -329,9 +304,7 @@ ui.playPauseBtn?.addEventListener("click", () => {
 
   player.togglePlayPause?.();
 
-  if (a.paused) {
-    a.play().catch(() => {});
-  }
+  if (a.paused) a.play().catch(() => {});
 });
 
 // Prev / Next
@@ -418,7 +391,6 @@ ui.themeToggleBtn?.addEventListener("click", () => {
 ui.vizStyleBtn?.addEventListener("click", () => {
   const style = settings.toggleVisualizerStyle?.() ?? settings.get("visualizerStyle");
   updateVizIcons();
-  visualizer?.setStyle?.(style);
   showToast(`ビジュアライザー: ${style}`);
 });
 
@@ -806,7 +778,6 @@ function renderPlaylist() {
     });
     li.appendChild(del);
 
-    // ★曲クリックは「PlayerCore→鳴らなければ強制再生」の二段構え
     li.addEventListener("click", () => {
       if (playlist.selectMode) {
         playlist.toggleSelect?.(index);

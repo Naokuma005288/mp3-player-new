@@ -13,7 +13,7 @@ export default class AudioFx {
     if (!this.ctx){
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    return this.ctx;
+    return this.ctx; // Visualizer側が使うので返す
   }
 
   resumeContext(){
@@ -74,20 +74,17 @@ export default class AudioFx {
   // ★互換用：Playlistが呼ぶやつ
   // ============================
   // いまは「正規化しない=1」を返す簡易版。
-  // 後でRMS/Peak解析に差し替えればOK。
   async analyzeAndGetGain(file){
-    // 解析しない方針なら常に 1
     return 1;
   }
 
   // ============================
-  // 互換用（PlayerCoreが呼ぶ可能性）
+  // PlayerCore互換（存在しなくても落ちない）
   // ============================
   applyEqPresetToAll(){ /* 今は何もしない */ }
 
   applyNormalizeToCurrent(gainNode, gainValue){
     if (!gainNode) return;
-    // gainValue をそのまま適用（安全値は PlayerCore で処理済み）
     gainNode.gain.value = gainValue ?? 1;
   }
 
