@@ -4,7 +4,7 @@ export default class AudioFx {
     this.settings = settings;
     this.ctx = null;
 
-    // ★ A/Bなど複数audio用のノードを保持
+    // A/Bなど複数audio用のノードを保持
     // 形式: { audio, source, gain }
     this.nodes = [];
   }
@@ -13,7 +13,7 @@ export default class AudioFx {
     if (!this.ctx){
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    return this.ctx; // ★ visualizer側が受け取れるよう返す
+    return this.ctx;
   }
 
   resumeContext(){
@@ -22,7 +22,7 @@ export default class AudioFx {
     }
   }
 
-  // ★ audioごとに個別のsource/gainを作って保持する
+  // audioごとに個別のsource/gainを作って保持する
   attach(audioEl){
     if (!audioEl) return null;
 
@@ -54,7 +54,6 @@ export default class AudioFx {
     return { gain };
   }
 
-  // 任意で切りたい時用（今のところ未使用でもOK）
   detach(audioEl){
     const idx = this.nodes.findIndex(n => n.audio === audioEl);
     if (idx === -1) return;
@@ -70,4 +69,28 @@ export default class AudioFx {
   getGain(audioEl){
     return this.nodes.find(n => n.audio === audioEl)?.gain ?? null;
   }
+
+  // ============================
+  // ★互換用：Playlistが呼ぶやつ
+  // ============================
+  // いまは「正規化しない=1」を返す簡易版。
+  // 後でRMS/Peak解析に差し替えればOK。
+  async analyzeAndGetGain(file){
+    // 解析しない方針なら常に 1
+    return 1;
+  }
+
+  // ============================
+  // 互換用（PlayerCoreが呼ぶ可能性）
+  // ============================
+  applyEqPresetToAll(){ /* 今は何もしない */ }
+
+  applyNormalizeToCurrent(gainNode, gainValue){
+    if (!gainNode) return;
+    // gainValue をそのまま適用（安全値は PlayerCore で処理済み）
+    gainNode.gain.value = gainValue ?? 1;
+  }
+
+  setEqEnabled(){ /* 今は何もしない */ }
+  setNormalizeEnabled(){ /* 今は何もしない */ }
 }
