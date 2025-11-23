@@ -1,464 +1,530 @@
-import { clamp } from "./utils.js";
+import { clamp, formatTime, showToast } from "./utils.js";
 
-export function createPlayerCore({
-  audioA,
-  audioB,
-  onPlayState,
-  onTimeUpdate,
-  onDuration,
-  onTrackChange,
-  onToast,
-}) {
-  let playlist = [];
-  let currentTrackIndex = -1;
+export class PlayerCore {
+  constructor(dom, settings, playlist, audioFx) {
+    this.dom = dom;
+    this.settings = settings;
+    this.playlist = playlist;
+    this.audioFx = audioFx;
 
-  let isShuffle = false;
-  let repeatMode = "none"; // none | all | one
-  let shuffled = [];
+    // v3.9.0: 2つのaudioで crossfade/gapless
+    this.audios = [new Audio(), new Audio()];
+    this.active = 0;
+    this.nextIndex = null;
 
-  let playbackRates = [1, 1.25, 1.5, 2, 0.75];
-  let rateIndex = 0;
+    this.audioContext = null;
+    this.sources = [];
+    this.gains = [];
+    this.analyser = null;
+    this.frequencyData = null;
+    this.bufferLength = 0;
+    this.isAudioContextInitialized = false;
 
-  // v3.7.0 crossfade
-  let crossfadeEnabled = false;
-  const crossfadeSecList = [1,2,3,0.5];
-  let crossfadeSecIndex = 1; // default 2s
-  let isCrossfading = false;
+    this.isMinimalMode = false;
 
-  // v3.7.0 AB loop
-  let abA = null;
-  let abB = null;
-  let abEnabled = false;
+    this.ab = { enabled: false, A: null, B: null };
 
-  // audio context / nodes
-  let audioContext = null;
-  let analyser = null;
-  let srcA = null, srcB = null;
-  let gainA = null, gainB = null;
-
-  let active = "A"; // "A" | "B"
-  let urlMap = new Map(); // index -> objectURL
-  let lastWasPlaying = false;
-
-  function getActiveAudio() {
-    return active === "A" ? audioA : audioB;
-  }
-  function getInactiveAudio() {
-    return active === "A" ? audioB : audioA;
-  }
-  function getActiveGain() {
-    return active === "A" ? gainA : gainB;
-  }
-  function getInactiveGain() {
-    return active === "A" ? gainB : gainA;
+    this.bindAudioEvents();
+    this.bindPlaylistEvents();
   }
 
-  function initAudioContextIfNeeded() {
-    if (audioContext) return;
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.85;
-
-    srcA = audioContext.createMediaElementSource(audioA);
-    srcB = audioContext.createMediaElementSource(audioB);
-    gainA = audioContext.createGain();
-    gainB = audioContext.createGain();
-    gainA.gain.value = 1;
-    gainB.gain.value = 0;
-
-    srcA.connect(gainA);
-    srcB.connect(gainB);
-    gainA.connect(analyser);
-    gainB.connect(analyser);
-    analyser.connect(audioContext.destination);
-  }
-
-  function setPlaylist(list) {
-    playlist = list;
-    if (isShuffle) createShuffled();
-  }
-
-  function createShuffled() {
-    const current = currentTrackIndex !== -1 ? [currentTrackIndex] : [];
-    let remaining = playlist.map((_, i) => i).filter(i => i !== currentTrackIndex);
-    for (let i = remaining.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random()*(i+1));
-      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
-    }
-    shuffled = [...current, ...remaining];
-  }
-
-  function getNextIndex() {
-    if (playlist.length === 0) return -1;
-
-    if (repeatMode === "one") return currentTrackIndex;
-
-    if (isShuffle) {
-      const curPos = shuffled.indexOf(currentTrackIndex);
-      const nextPos = curPos + 1;
-      if (nextPos >= shuffled.length) {
-        if (repeatMode === "all") {
-          createShuffled();
-          return shuffled[0];
-        }
-        return -1;
+  bindPlaylistEvents() {
+    document.addEventListener("playlist:playIndex", (e) => this.loadTrack(e.detail, true));
+    document.addEventListener("playlist:currentRemoved", () => {
+      if (this.playlist.currentIndex >= 0) this.loadTrack(this.playlist.currentIndex, true);
+      else this.stop();
+    });
+    document.addEventListener("playlist:cleared", () => this.stop());
+    document.addEventListener("playlist:filesAdded", async () => {
+      await this.postProcessNewTracks();
+      this.updateControls();
+      if (this.playlist.currentIndex >= 0) {
+        this.prepareTrack(this.playlist.currentIndex);
+        this.updateMainUI();
       }
-      return shuffled[nextPos];
-    }
-
-    let i = currentTrackIndex + 1;
-    if (i >= playlist.length) {
-      if (repeatMode === "all") return 0;
-      return -1;
-    }
-    return i;
+    });
   }
 
-  function getPrevIndex() {
-    if (playlist.length === 0) return -1;
+  async postProcessNewTracks() {
+    // gain/waveform解析
+    const tasks = this.playlist.tracks.map(async (t) => {
+      if (t.gainDone) return;
+      const { gain, peaks } = await this.audioFx.analyzeGainAndWaveform(t.file);
+      t.gain = gain;
+      t.waveform = peaks;
+      t.gainDone = true;
+    });
+    await Promise.all(tasks);
+  }
 
-    if (isShuffle) {
-      const curPos = shuffled.indexOf(currentTrackIndex);
-      const prevPos = curPos - 1;
-      if (prevPos < 0) return shuffled[shuffled.length - 1];
-      return shuffled[prevPos];
+  bindAudioEvents() {
+    this.audios.forEach((a, idx) => {
+      a.preload = "auto";
+      a.addEventListener("timeupdate", () => this.onTimeUpdate());
+      a.addEventListener("ended", () => this.onEnded(idx));
+      a.addEventListener("loadedmetadata", () => this.onLoadedMetadata());
+      a.addEventListener("play", () => this.updatePlayPauseIcon());
+      a.addEventListener("pause", () => this.updatePlayPauseIcon());
+    });
+  }
+
+  get audio() {
+    return this.audios[this.active];
+  }
+
+  get inactiveAudio() {
+    return this.audios[1 - this.active];
+  }
+
+  ensureAudioContext() {
+    if (this.isAudioContextInitialized) return;
+
+    this.audioContext = this.audioFx.ensureContext();
+
+    this.sources = this.audios.map(a => this.audioContext.createMediaElementSource(a));
+    this.gains = this.audios.map(() => this.audioContext.createGain());
+
+    // EQ chain
+    const eqIn = this.audioFx.getInputNode();
+    const eqOut = this.audioFx.getOutputNode();
+
+    // analyser
+    this.analyser = this.audioContext.createAnalyser();
+    this.analyser.fftSize = 512;
+    this.analyser.smoothingTimeConstant = 0.85;
+    this.bufferLength = this.analyser.frequencyBinCount;
+    this.frequencyData = new Uint8Array(this.bufferLength);
+
+    // connect graph:
+    // source -> gain -> EQ -> analyser -> destination
+    this.sources.forEach((src, i) => {
+      src.connect(this.gains[i]);
+      this.gains[i].connect(eqIn);
+    });
+    eqOut.connect(this.analyser);
+    this.analyser.connect(this.audioContext.destination);
+
+    this.isAudioContextInitialized = true;
+  }
+
+  async resumeContextIfNeeded() {
+    this.ensureAudioContext();
+    if (this.audioContext.state === "suspended") {
+      try { await this.audioContext.resume(); } catch {}
+    }
+  }
+
+  updateControls() {
+    const isDisabled = this.playlist.tracks.length === 0;
+    [
+      this.dom.playPauseBtn, this.dom.progressBar,
+      this.dom.prevBtn, this.dom.nextBtn, this.dom.shuffleBtn,
+      this.dom.repeatBtn, this.dom.seekForwardBtn, this.dom.seekBackwardBtn,
+      this.dom.playlistToggleBtn, this.dom.playbackRateBtn
+    ].forEach(b => b.disabled = isDisabled);
+
+    this.dom.fileSelectUI.classList.toggle("file-select-hidden", !isDisabled);
+  }
+
+  updateMainUI() {
+    const t = this.playlist.currentTrack;
+    if (!t) {
+      this.dom.songTitle.textContent = "再生する曲はありません";
+      this.dom.songArtist.textContent = "ファイルをロードしてください";
+      this.resetAlbumArt();
+      return;
     }
 
-    let i = currentTrackIndex - 1;
-    if (i < 0) {
-      if (repeatMode === "all") return playlist.length - 1;
-      return 0;
-    }
-    return i;
-  }
+    this.dom.songTitle.textContent = t.title;
+    this.dom.songArtist.textContent = t.artist;
 
-  function revokeURL(index) {
-    const u = urlMap.get(index);
-    if (u) {
-      URL.revokeObjectURL(u);
-      urlMap.delete(index);
-    }
-  }
-
-  function setAudioSrc(audioEl, index) {
-    const track = playlist[index];
-    if (!track) return null;
-    const url = URL.createObjectURL(track.file);
-    urlMap.set(index, url);
-    audioEl.src = url;
-    audioEl.playbackRate = playbackRates[rateIndex];
-    return url;
-  }
-
-  function prepareTrack(index, audioEl) {
-    if (index < 0 || index >= playlist.length) return;
-    setAudioSrc(audioEl, index);
-  }
-
-  function loadTrack(index, autoplay=true) {
-    if (index < 0 || index >= playlist.length) return;
-
-    initAudioContextIfNeeded();
-    if (audioContext.state === "suspended") audioContext.resume();
-
-    // stop inactive too
-    getInactiveAudio().pause();
-    getInactiveAudio().currentTime = 0;
-
-    // active audio replace
-    const prevIndex = currentTrackIndex;
-    if (prevIndex !== -1) revokeURL(prevIndex);
-
-    currentTrackIndex = index;
-    const activeAudio = getActiveAudio();
-    prepareTrack(index, activeAudio);
-
-    onTrackChange?.(index);
-
-    if (autoplay) {
-      activeAudio.play().catch(()=>{});
-      lastWasPlaying = true;
+    if (t.artwork) {
+      this.dom.albumArt.src = t.artwork;
+      this.dom.albumArt.classList.remove("opacity-20");
     } else {
-      lastWasPlaying = false;
-      activeAudio.pause();
+      this.resetAlbumArt();
     }
   }
 
-  function togglePlayPause() {
-    const a = getActiveAudio();
-    if (!a.src) {
-      if (playlist.length > 0) loadTrack(0, true);
+  resetAlbumArt() {
+    this.dom.albumArt.src = "https://placehold.co/512x512/312e81/ffffff?text=MP3";
+    this.dom.albumArt.classList.add("opacity-20");
+  }
+
+  prepareTrack(index) {
+    if (index < 0 || index >= this.playlist.tracks.length) return;
+    this.playlist.currentIndex = index;
+    const track = this.playlist.currentTrack;
+
+    // URL cleanup
+    if (track.fileUrl) URL.revokeObjectURL(track.fileUrl);
+    track.fileUrl = URL.createObjectURL(track.file);
+
+    this.audio.src = track.fileUrl;
+    this.audio.playbackRate = this.settings.playbackRates[this.settings.rateIndex];
+    this.setGainForActive(track.gain || 1);
+
+    this.updateMainUI();
+    this.updatePlayPauseIcon();
+    this.dom.duration.textContent = formatTime(track.duration);
+    this.dom.progressBar.value = 0;
+
+    document.dispatchEvent(new CustomEvent("player:trackPrepared", { detail: track }));
+  }
+
+  async loadTrack(index, autoplay = false) {
+    if (index < 0 || index >= this.playlist.tracks.length) return;
+
+    await this.resumeContextIfNeeded();
+    this.prepareTrack(index);
+    if (autoplay) this.play();
+  }
+
+  isPlaying() {
+    return !this.audio.paused && !this.audio.ended;
+  }
+
+  play() {
+    this.audio.play().catch(() => {});
+  }
+
+  pause() {
+    this.audio.pause();
+  }
+
+  stop() {
+    this.audio.pause();
+    this.audio.currentTime = 0;
+    this.dom.progressBar.value = 0;
+    this.dom.currentTime.textContent = "0:00";
+    this.updatePlayPauseIcon();
+  }
+
+  playPause() {
+    this.resumeContextIfNeeded();
+    if (!this.playlist.tracks.length) return;
+
+    if (this.playlist.currentIndex === -1) {
+      this.loadTrack(0, true);
       return;
     }
-    if (a.paused) {
-      initAudioContextIfNeeded();
-      if (audioContext.state === "suspended") audioContext.resume();
-      a.play().catch(()=>{});
-      lastWasPlaying = true;
+    if (this.audio.paused) this.play();
+    else this.pause();
+  }
+
+  playNext() {
+    if (!this.playlist.tracks.length) return;
+
+    let newIndex;
+    if (this.settings.isShuffle) {
+      newIndex = this.playlist.currentIndex;
+      while (newIndex === this.playlist.currentIndex && this.playlist.tracks.length > 1) {
+        newIndex = Math.floor(Math.random() * this.playlist.tracks.length);
+      }
     } else {
-      a.pause();
-      lastWasPlaying = false;
+      newIndex = this.playlist.currentIndex + 1;
+      if (newIndex >= this.playlist.tracks.length) {
+        if (this.settings.repeatMode === "all") newIndex = 0;
+        else { this.stop(); return; }
+      }
     }
+    this.loadTrack(newIndex, true);
   }
 
-  function seekBy(seconds) {
-    const a = getActiveAudio();
-    if (a.readyState >= 2) {
-      a.currentTime = clamp(a.currentTime + seconds, 0, a.duration);
-    }
-  }
+  playPrev() {
+    if (!this.playlist.tracks.length) return;
 
-  function playNext() {
-    const ni = getNextIndex();
-    if (ni === -1) {
-      getActiveAudio().pause();
-      lastWasPlaying = false;
+    if (this.audio.currentTime > 5) {
+      this.audio.currentTime = 0;
       return;
     }
-    loadTrack(ni, true);
+    let newIndex = this.playlist.currentIndex - 1;
+    if (newIndex < 0) {
+      if (this.settings.repeatMode === "all") newIndex = this.playlist.tracks.length - 1;
+      else { this.audio.currentTime = 0; return; }
+    }
+    this.loadTrack(newIndex, true);
   }
 
-  function playPrev() {
-    const a = getActiveAudio();
-    if (a.currentTime > 5) {
-      a.currentTime = 0;
+  toggleShuffle() {
+    this.settings.isShuffle = !this.settings.isShuffle;
+    this.dom.shuffleBtn.classList.toggle("btn-active", this.settings.isShuffle);
+    this.settings.save();
+  }
+
+  toggleRepeat() {
+    this.dom.repeatNoneIcon.classList.add("hidden");
+    this.dom.repeatAllIcon.classList.add("hidden");
+    this.dom.repeatOneIcon.classList.add("hidden");
+
+    if (this.settings.repeatMode === "none") {
+      this.settings.repeatMode = "all";
+      this.dom.repeatAllIcon.classList.remove("hidden");
+    } else if (this.settings.repeatMode === "all") {
+      this.settings.repeatMode = "one";
+      this.dom.repeatOneIcon.classList.remove("hidden");
+    } else {
+      this.settings.repeatMode = "none";
+      this.dom.repeatNoneIcon.classList.remove("hidden");
+    }
+    this.settings.save();
+  }
+
+  seek(sec) {
+    if (this.audio.readyState < 2) return;
+    this.audio.currentTime = clamp(this.audio.currentTime + sec, 0, this.audio.duration || 0);
+  }
+
+  previewSeek(value) {
+    if (!this.audio.duration) return;
+    const t = this.audio.duration * (value / 100);
+    this.dom.currentTime.textContent = formatTime(t);
+  }
+
+  commitSeek(value) {
+    if (!this.audio.duration) return;
+    const t = this.audio.duration * (value / 100);
+    this.audio.currentTime = t;
+  }
+
+  showSeekTooltip(e) {
+    if (!this.audio.duration) return;
+    const rect = this.dom.progressBar.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const p = clamp(x / rect.width, 0, 1);
+    const t = this.audio.duration * p;
+
+    this.dom.seekTooltip.textContent = formatTime(t);
+    this.dom.seekTooltip.style.left = `${p * 100}%`;
+    this.dom.seekTooltip.classList.remove("hidden");
+  }
+
+  hideSeekTooltip() {
+    this.dom.seekTooltip.classList.add("hidden");
+  }
+
+  setVolume(v) {
+    this.audio.volume = v;
+    this.settings.volume = v;
+    if (v > 0) this.settings.lastVolume = v;
+    this.updateVolumeIcon(v);
+    this.settings.save();
+  }
+
+  toggleMute() {
+    if (this.audio.volume > 0) this.setVolume(0);
+    else this.setVolume(this.settings.lastVolume || 1);
+    this.dom.volumeControl.value = this.audio.volume;
+  }
+
+  updateVolumeIcon(volume) {
+    this.dom.volumeHighIcon.classList.toggle("hidden", volume === 0);
+    this.dom.volumeMuteIcon.classList.toggle("hidden", volume !== 0);
+  }
+
+  onLoadedMetadata() {
+    if (!this.audio.duration) return;
+    this.dom.duration.textContent = formatTime(this.audio.duration);
+  }
+
+  onTimeUpdate() {
+    if (!this.audio.duration) return;
+
+    // AB repeat（v3.7.1強化）
+    if (this.ab.enabled && this.ab.A != null && this.ab.B != null) {
+      if (this.ab.B <= this.ab.A) {
+        this.ab.enabled = false;
+        showToast("A-B範囲が不正なので解除しました", true);
+      } else if (this.audio.currentTime >= this.ab.B) {
+        this.audio.currentTime = this.ab.A;
+      }
+    }
+
+    const p = (this.audio.currentTime / this.audio.duration) * 100;
+    this.dom.progressBar.value = p;
+
+    const newTime = formatTime(this.audio.currentTime);
+    if (this.dom.currentTime.textContent !== newTime) {
+      this.dom.currentTime.textContent = newTime;
+    }
+
+    // v3.7.1: XF境界 / gapless
+    this.maybePrepareNext();
+  }
+
+  maybePrepareNext() {
+    const mode = this.settings.transitionMode;
+    if (mode === "none") return;
+    if (this.nextIndex != null) return;
+    if (!this.audio.duration) return;
+
+    const remain = this.audio.duration - this.audio.currentTime;
+
+    // 次曲候補
+    let idx = this.playlist.currentIndex + 1;
+    if (idx >= this.playlist.tracks.length) {
+      if (this.settings.repeatMode === "all") idx = 0;
+      else return;
+    }
+    this.nextIndex = idx;
+
+    if (mode === "gapless") {
+      if (remain <= 0.6) {
+        this.loadTrack(idx, true);
+        this.nextIndex = null;
+      }
       return;
     }
-    const pi = getPrevIndex();
-    if (pi === -1) return;
-    loadTrack(pi, true);
+
+    if (mode === "crossfade") {
+      const xf = this.settings.crossfadeSeconds;
+      // v3.7.1: 短すぎ/境界対策
+      if (remain <= xf + 0.15 && this.audio.duration > xf + 0.5) {
+        this.crossfadeTo(idx, xf);
+      } else {
+        this.nextIndex = null;
+      }
+    }
   }
 
-  // repeat / shuffle / rate
-  function toggleShuffle() {
-    isShuffle = !isShuffle;
-    if (isShuffle) createShuffled();
-  }
-  function cycleRepeat() {
-    if (repeatMode === "none") repeatMode = "all";
-    else if (repeatMode === "all") repeatMode = "one";
-    else repeatMode = "none";
-  }
-  function cycleRate() {
-    rateIndex = (rateIndex + 1) % playbackRates.length;
-    const r = playbackRates[rateIndex];
-    audioA.playbackRate = r;
-    audioB.playbackRate = r;
-    return r;
-  }
+  async crossfadeTo(index, seconds) {
+    await this.resumeContextIfNeeded();
 
-  // volume
-  function setVolume(v) {
-    audioA.volume = v;
-    audioB.volume = v;
-  }
+    const nextTrack = this.playlist.tracks[index];
+    if (!nextTrack) return;
 
-  // v3.7.0 crossfade
-  function toggleCrossfade() {
-    crossfadeEnabled = !crossfadeEnabled;
-    if (crossfadeEnabled) onToast?.("クロスフェード ON");
-    else onToast?.("クロスフェード OFF");
-  }
-  function cycleCrossfadeSec() {
-    crossfadeSecIndex = (crossfadeSecIndex + 1) % crossfadeSecList.length;
-    return crossfadeSecList[crossfadeSecIndex];
-  }
-  function getCrossfadeSec() {
-    return crossfadeSecList[crossfadeSecIndex];
-  }
+    // inactiveに次曲セット
+    if (nextTrack.fileUrl) URL.revokeObjectURL(nextTrack.fileUrl);
+    nextTrack.fileUrl = URL.createObjectURL(nextTrack.file);
 
-  function startCrossfadeIfNeeded() {
-    if (!crossfadeEnabled || isCrossfading || abEnabled) return;
+    const inactive = this.inactiveAudio;
+    inactive.src = nextTrack.fileUrl;
+    inactive.playbackRate = this.audio.playbackRate;
 
-    const a = getActiveAudio();
-    if (!a.duration || a.duration < getCrossfadeSec() + 0.5) return;
+    // gainセット
+    this.setGainForInactive(nextTrack.gain || 1);
 
-    const remaining = a.duration - a.currentTime;
-    if (remaining > getCrossfadeSec()) return;
+    try { await inactive.play(); } catch {}
 
-    const ni = getNextIndex();
-    if (ni === -1 || ni === currentTrackIndex) return;
+    // フェード
+    const gA = this.gains[this.active];
+    const gB = this.gains[1 - this.active];
+    const ac = this.audioContext;
+    const now = ac.currentTime;
 
-    initAudioContextIfNeeded();
-    if (audioContext.state === "suspended") audioContext.resume();
+    gB.gain.cancelScheduledValues(now);
+    gA.gain.cancelScheduledValues(now);
 
-    isCrossfading = true;
+    gB.gain.setValueAtTime(0, now);
+    gB.gain.linearRampToValueAtTime(1, now + seconds);
 
-    const inactiveAudio = getInactiveAudio();
-    const inactiveGain = getInactiveGain();
-    const activeGain = getActiveGain();
-
-    // prepare next on inactive
-    prepareTrack(ni, inactiveAudio);
-    inactiveAudio.currentTime = 0;
-    inactiveAudio.playbackRate = a.playbackRate;
-
-    inactiveGain.gain.cancelScheduledValues(audioContext.currentTime);
-    activeGain.gain.cancelScheduledValues(audioContext.currentTime);
-
-    inactiveGain.gain.setValueAtTime(0, audioContext.currentTime);
-    activeGain.gain.setValueAtTime(1, audioContext.currentTime);
-
-    inactiveAudio.play().catch(()=>{});
-
-    inactiveGain.gain.linearRampToValueAtTime(1, audioContext.currentTime + getCrossfadeSec());
-    activeGain.gain.linearRampToValueAtTime(0, audioContext.currentTime + getCrossfadeSec());
-
-    const prevIndex = currentTrackIndex;
+    gA.gain.setValueAtTime(1, now);
+    gA.gain.linearRampToValueAtTime(0, now + seconds);
 
     setTimeout(() => {
-      // stop old active
-      a.pause();
-      a.currentTime = 0;
-      revokeURL(prevIndex);
-
-      // swap
-      active = (active === "A") ? "B" : "A";
-      currentTrackIndex = ni;
-
-      // reset gains for next time
-      getActiveGain().gain.setValueAtTime(1, audioContext.currentTime);
-      getInactiveGain().gain.setValueAtTime(0, audioContext.currentTime);
-
-      isCrossfading = false;
-      onTrackChange?.(ni);
-      onPlayState?.(true);
-    }, getCrossfadeSec() * 1000 + 30);
+      // active切替
+      this.audio.pause();
+      this.active = 1 - this.active;
+      this.nextIndex = null;
+      this.playlist.currentIndex = index;
+      this.updateMainUI();
+      this.updatePlayPauseIcon();
+      document.dispatchEvent(new CustomEvent("player:trackPrepared", { detail: this.playlist.currentTrack }));
+    }, seconds * 1000);
   }
 
-  // v3.7.0 AB loop
-  function setA() {
-    const a = getActiveAudio();
-    if (!a.duration) return null;
-    abA = a.currentTime;
-    if (abB != null && abB > abA) abEnabled = true;
-    return abA;
+  setGainForActive(trackGain) {
+    if (!this.gains.length) return;
+    this.gains[this.active].gain.value = trackGain;
   }
-  function setB() {
-    const a = getActiveAudio();
-    if (!a.duration) return null;
-    abB = a.currentTime;
-    if (abA != null && abB > abA) abEnabled = true;
-    return abB;
-  }
-  function clearAB() {
-    abA = null; abB = null; abEnabled = false;
+  setGainForInactive(trackGain) {
+    if (!this.gains.length) return;
+    this.gains[1 - this.active].gain.value = trackGain;
   }
 
-  // events wiring to both audios
-  function bindAudioEvents(audioEl) {
-    audioEl.addEventListener("play", () => onPlayState?.(true));
-    audioEl.addEventListener("pause", () => onPlayState?.(false));
-    audioEl.addEventListener("loadedmetadata", () => {
-      onDuration?.(audioEl.duration);
-    });
-    audioEl.addEventListener("timeupdate", () => {
-      if (audioEl !== getActiveAudio()) return;
+  onEnded(endedIndex) {
+    if (endedIndex !== this.active) return; // inactiveのendedは無視
 
-      // AB loop check
-      if (abEnabled && abA != null && abB != null && audioEl.currentTime >= abB) {
-        audioEl.currentTime = abA;
-      }
+    if (this.settings.repeatMode === "one") {
+      this.audio.currentTime = 0;
+      this.play();
+      return;
+    }
 
-      onTimeUpdate?.(audioEl.currentTime, audioEl.duration);
-      startCrossfadeIfNeeded();
-    });
-    audioEl.addEventListener("ended", () => {
-      if (audioEl !== getActiveAudio()) return;
-      if (isCrossfading) return;
+    if (this.settings.transitionMode !== "crossfade") {
+      this.playNext();
+    }
+  }
 
-      if (repeatMode === "one") {
-        audioEl.currentTime = 0;
-        audioEl.play().catch(()=>{});
+  updatePlayPauseIcon() {
+    const paused = this.audio.paused || this.audio.ended;
+    this.dom.playIcon.classList.toggle("hidden", !paused);
+    this.dom.pauseIcon.classList.toggle("hidden", paused);
+    this.dom.minimalPlayIcon.classList.toggle("hidden", !paused);
+    this.dom.minimalPauseIcon.classList.toggle("hidden", paused);
+
+    this.updateMinimalOverlay();
+  }
+
+  toggleMinimalMode() {
+    if (!this.playlist.tracks.length) return;
+    this.isMinimalMode = !this.isMinimalMode;
+    this.dom.playerContainer.classList.toggle("minimal", this.isMinimalMode);
+    this.updateMinimalOverlay();
+  }
+
+  updateMinimalOverlay() {
+    if (this.isMinimalMode) {
+      if (this.audio.paused || this.audio.ended) {
+        this.dom.minimalOverlay.classList.remove("opacity-0", "pointer-events-none");
+        this.dom.minimalOverlay.classList.add("pointer-events-auto");
       } else {
-        playNext();
+        this.dom.minimalOverlay.classList.add("opacity-0", "pointer-events-none");
+        this.dom.minimalOverlay.classList.remove("pointer-events-auto");
       }
-    });
-  }
-  bindAudioEvents(audioA);
-  bindAudioEvents(audioB);
-
-  function getStateForSave() {
-    const a = getActiveAudio();
-    return {
-      volume: a.volume,
-      repeatMode,
-      isShuffle,
-      rateIndex,
-      crossfadeEnabled,
-      crossfadeSecIndex,
-      abA, abB, abEnabled,
-      lastTrackIndex: currentTrackIndex,
-      lastTrackTime: a.currentTime || 0,
-      wasPlaying: !a.paused && !a.ended,
-    };
+    } else {
+      this.dom.minimalOverlay.classList.add("opacity-0", "pointer-events-none");
+      this.dom.minimalOverlay.classList.remove("pointer-events-auto");
+    }
   }
 
-  // v3.6.0 restore (ファイル再追加後に一致したら復元)
-  function restoreIfMatch(saved, currentNames) {
-    if (!saved) return null;
-    if (!Array.isArray(saved.lastPlaylistNames)) return null;
-    if (saved.lastPlaylistNames.length !== currentNames.length) return null;
-
-    const same = saved.lastPlaylistNames.every((n, i) => n === currentNames[i]);
-    if (!same) return null;
-
-    return {
-      index: clamp(saved.lastTrackIndex ?? 0, 0, currentNames.length-1),
-      time: saved.lastTrackTime ?? 0,
-      wasPlaying: !!saved.wasPlaying,
-    };
+  onMinimalClick() {
+    if (!this.playlist.tracks.length) return;
+    if (this.playlist.currentIndex === -1) this.loadTrack(0, true);
+    else this.playPause();
   }
 
-  function applySavedBasics(saved) {
-    if (!saved) return;
-    repeatMode = saved.repeatMode || "none";
-    isShuffle = !!saved.isShuffle;
-    rateIndex = saved.rateIndex ?? 0;
-    crossfadeEnabled = !!saved.crossfadeEnabled;
-    crossfadeSecIndex = saved.crossfadeSecIndex ?? 1;
-    abA = saved.abA ?? null;
-    abB = saved.abB ?? null;
-    abEnabled = !!saved.abEnabled;
-    setVolume(saved.volume ?? 1);
-    if (isShuffle) createShuffled();
+  handleKeydown(e) {
+    if (e.target === this.dom.playlistSearch) return;
+    if (!this.playlist.tracks.length) return;
+
+    if (e.code === "Space" && e.target.tagName !== "INPUT") {
+      e.preventDefault();
+      this.playPause();
+    }
+    if (e.code === "ArrowRight") {
+      e.preventDefault();
+      if (e.shiftKey) this.playNext();
+      else this.seek(10);
+    }
+    if (e.code === "ArrowLeft") {
+      e.preventDefault();
+      if (e.shiftKey) this.playPrev();
+      else this.seek(-10);
+    }
   }
 
-  return {
-    // getters for visualizer
-    getAudioContext: () => audioContext,
-    getAnalyser: () => analyser,
+  getAnalyserData() {
+    if (!this.analyser) return null;
+    this.analyser.getByteFrequencyData(this.frequencyData);
+    return this.frequencyData;
+  }
 
-    setPlaylist,
-    loadTrack,
-    togglePlayPause,
-    playNext,
-    playPrev,
-    seekBy,
-    toggleShuffle,
-    cycleRepeat,
-    cycleRate,
-    setVolume,
-    toggleCrossfade,
-    cycleCrossfadeSec,
-    getCrossfadeSec,
-    setA, setB, clearAB,
-    getABState: () => ({abA, abB, abEnabled}),
-    setRepeatMode: (m)=> repeatMode=m,
-    setShuffle: (v)=> {isShuffle=v; if(v) createShuffled();},
-    setRateIndex: (i)=> {rateIndex=i; const r=playbackRates[rateIndex]; audioA.playbackRate=r; audioB.playbackRate=r;},
+  getCurrentTime() {
+    return this.audio.currentTime || 0;
+  }
 
-    getCurrentIndex: ()=> currentTrackIndex,
-    isShuffle: ()=> isShuffle,
-    getRepeatMode: ()=> repeatMode,
-    getRateIndex: ()=> rateIndex,
-    isCrossfadeEnabled: ()=> crossfadeEnabled,
-    getCrossfadeSecIndex: ()=> crossfadeSecIndex,
-
-    getActiveAudio,
-    getStateForSave,
-    applySavedBasics,
-    restoreIfMatch,
-  };
+  seekTo(t) {
+    this.audio.currentTime = clamp(t, 0, this.audio.duration || t);
+  }
 }

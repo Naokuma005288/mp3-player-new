@@ -1,136 +1,136 @@
 import { clamp } from "./utils.js";
 
-export function createVisualizer({
-  canvas,
-  getAudioContext,
-  getAnalyser,
-  getStyle,
-}) {
-  const ctx = canvas.getContext("2d");
-  let bufferLength = 0;
-  let dataArray = null;
-  let rafId = null;
+export class Visualizer {
+  constructor(dom, settings, player) {
+    this.dom = dom;
+    this.settings = settings;
+    this.player = player;
 
-  function setupCanvasSize() {
+    this.canvas = dom.vizCanvas;
+    this.ctx = this.canvas.getContext("2d");
+
+    this.waveCanvas = dom.waveformCanvas;
+    this.waveCtx = this.waveCanvas.getContext("2d");
+
+    this.raf = null;
+  }
+
+  init() {
+    this.setupCanvas();
+    window.addEventListener("resize", () => this.setupCanvas());
+    this.loop();
+    document.addEventListener("player:trackPrepared", (e) => this.drawWaveform(e.detail));
+  }
+
+  setupCanvas() {
     const dpr = window.devicePixelRatio || 1;
-    const { offsetWidth, offsetHeight } = canvas.parentElement;
-    canvas.width = offsetWidth * dpr;
-    canvas.height = offsetHeight * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const parent = this.canvas.parentElement;
+    const w = parent.offsetWidth;
+    const h = parent.offsetHeight;
+
+    this.canvas.width = w * dpr;
+    this.canvas.height = h * dpr;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const pw = this.dom.progressBar.offsetWidth;
+    this.waveCanvas.width = pw * dpr;
+    this.waveCanvas.height = 32 * dpr;
+    this.waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function getGradient(width, height) {
+  loop() {
+    this.raf = requestAnimationFrame(() => this.loop());
+
+    const data = this.player.getAnalyserData();
+    const { width, height } = this.canvas.getBoundingClientRect();
+    this.ctx.clearRect(0, 0, width, height);
+
+    if (!data || this.player.audio.paused) return;
+
     const styles = getComputedStyle(document.documentElement);
-    const c1 = styles.getPropertyValue("--viz-grad-1").trim();
-    const c2 = styles.getPropertyValue("--viz-grad-2").trim();
-    const c3 = styles.getPropertyValue("--viz-grad-3").trim();
-    const gradHeight = height * 0.4;
+    const gradColor1 = styles.getPropertyValue("--viz-grad-1").trim();
+    const gradColor2 = styles.getPropertyValue("--viz-grad-2").trim();
+    const gradColor3 = styles.getPropertyValue("--viz-grad-3").trim();
+    const gradHeight = height * 0.40;
 
-    const g = ctx.createLinearGradient(0, gradHeight, 0, 0);
-    g.addColorStop(0, c1);
-    g.addColorStop(0.5, c2);
-    g.addColorStop(1, c3);
-    return { g, gradHeight };
+    const gradient = this.ctx.createLinearGradient(0, gradHeight, 0, 0);
+    gradient.addColorStop(0, gradColor1);
+    gradient.addColorStop(0.5, gradColor2);
+    gradient.addColorStop(1, gradColor3);
+
+    this.ctx.fillStyle = gradient;
+    this.ctx.strokeStyle = gradient;
+
+    const style = this.settings.vizStyle;
+    if (style === "bars") this.drawBars(data, width, height);
+    else if (style === "dots") this.drawDots(data, width, height, gradHeight);
+    else this.drawLine(data, width, height, gradHeight);
   }
 
-  function drawLine(width, height, gradHeight) {
-    ctx.lineWidth = 3;
-    const activeLen = Math.floor(bufferLength / 2);
-    const sliceWidth = (width / 2) / activeLen;
+  drawLine(data, width, height, gradHeight) {
+    const bufLen = Math.floor(data.length / 2);
+    const slice = (width / 2) / bufLen;
+    this.ctx.lineWidth = 3;
+    this.ctx.beginPath();
 
-    ctx.beginPath();
-    for (let i = activeLen - 1; i >= 0; i--) {
-      const n = dataArray[i] / 255;
-      const h = Math.pow(n, 1.5) * gradHeight * 0.9;
-      const x = (width / 2) - ((activeLen - i) * sliceWidth);
-      ctx.lineTo(x, height - h);
+    for (let i = bufLen - 1; i >= 0; i--) {
+      const v = Math.pow(data[i] / 255, 1.5) * gradHeight * 0.9;
+      const x = (width / 2) - ((bufLen - i) * slice);
+      this.ctx.lineTo(x, height - v);
     }
-    for (let i = 0; i < activeLen; i++) {
-      const n = dataArray[i] / 255;
-      const h = Math.pow(n, 1.5) * gradHeight * 0.9;
-      const x = (width / 2) + (i * sliceWidth);
-      ctx.lineTo(x, height - h);
+    for (let i = 0; i < bufLen; i++) {
+      const v = Math.pow(data[i] / 255, 1.5) * gradHeight * 0.9;
+      const x = (width / 2) + (i * slice);
+      this.ctx.lineTo(x, height - v);
     }
-    ctx.stroke();
+    this.ctx.stroke();
   }
 
-  function drawBars(width, height) {
-    const barWidth = (width / bufferLength) * 1.5;
+  drawBars(data, width, height) {
+    const barWidth = (width / data.length) * 1.5;
     let x = 0;
-    const activeLen = Math.floor(bufferLength / 1.5);
-
-    for (let i = 0; i < activeLen; i++) {
-      const h = (dataArray[i] / 255) * height * 0.4;
-      ctx.fillRect(x, height - h, barWidth, h);
+    const active = Math.floor(data.length / 1.5);
+    for (let i = 0; i < active; i++) {
+      const v = (data[i] / 255) * height * 0.4;
+      this.ctx.fillRect(x, height - v, barWidth, v);
       x += barWidth + 1;
     }
   }
 
-  function drawRadial(width, height) {
-    const cx = width / 2;
-    const cy = height * 0.95;
-    const maxR = Math.min(width, height) * 0.42;
-    const activeLen = Math.floor(bufferLength / 2);
-
-    for (let i = 0; i < activeLen; i++) {
-      const v = dataArray[i] / 255;
-      const angle = (i / activeLen) * Math.PI * 2;
-      const r = maxR * clamp(Math.pow(v, 1.2), 0, 1);
-      const x1 = cx + Math.cos(angle) * (maxR * 0.25);
-      const y1 = cy + Math.sin(angle) * (maxR * 0.25);
-      const x2 = cx + Math.cos(angle) * (maxR * 0.25 + r);
-      const y2 = cy + Math.sin(angle) * (maxR * 0.25 + r);
-
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
+  drawDots(data, width, height, gradHeight) {
+    const active = Math.floor(data.length / 2);
+    const step = width / active;
+    for (let i = 0; i < active; i++) {
+      const v = Math.pow(data[i] / 255, 1.7) * gradHeight;
+      const x = i * step;
+      const y = height - v;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      this.ctx.fill();
     }
   }
 
-  function loop() {
-    rafId = requestAnimationFrame(loop);
-
-    const analyser = getAnalyser();
-    const ac = getAudioContext();
-    if (!analyser || !ac) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-
-    if (!dataArray) {
-      bufferLength = analyser.frequencyBinCount;
-      dataArray = new Uint8Array(bufferLength);
-    }
-
-    analyser.getByteFrequencyData(dataArray);
-
-    const { width, height } = canvas.getBoundingClientRect();
+  drawWaveform(track) {
+    const ctx = this.waveCtx;
+    const { width, height } = this.waveCanvas.getBoundingClientRect();
     ctx.clearRect(0, 0, width, height);
 
-    const { g, gradHeight } = getGradient(width, height);
-    ctx.fillStyle = g;
-    ctx.strokeStyle = g;
-    ctx.lineCap = "round";
+    if (!this.settings.waveformEnabled) return;
+    if (!track?.waveform) return;
 
-    const style = getStyle();
-    if (style === "line") drawLine(width, height, gradHeight);
-    else if (style === "bars") drawBars(width, height);
-    else drawRadial(width, height);
+    const peaks = track.waveform;
+    const midY = height / 2;
+    const step = width / peaks.length;
+
+    const styles = getComputedStyle(document.documentElement);
+    ctx.fillStyle = styles.getPropertyValue("--thumb-color").trim();
+
+    for (let i = 0; i < peaks.length; i++) {
+      const p = clamp(peaks[i], 0, 1);
+      const h = p * height * 0.9;
+      const x = i * step;
+      ctx.fillRect(x, midY - h / 2, step * 0.8, h);
+    }
   }
-
-  function start() {
-    setupCanvasSize();
-    if (!rafId) loop();
-  }
-
-  function stop() {
-    if (rafId) cancelAnimationFrame(rafId);
-    rafId = null;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  window.addEventListener("resize", setupCanvasSize);
-
-  return { start, stop, setupCanvasSize };
 }
