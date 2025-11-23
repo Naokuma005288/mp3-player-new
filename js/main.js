@@ -1,4 +1,4 @@
-// js/main.js  v3.9.1 hotfix4 full
+// js/main.js  v3.9.1 hotfix5 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -18,7 +18,7 @@ import { clamp as _clamp, formatTime, isMp3File } from "./modules/utils.js";
 const AudioFxResolved =
   AudioFxMod.AudioFx ||
   AudioFxMod.default ||
-  AudioFxMod.AudioFX || // 万一名前違いの保険
+  AudioFxMod.AudioFX ||
   null;
 
 // フォールバック（AudioFx が無くても再生だけは動く）
@@ -167,7 +167,7 @@ playlist.reloadFromPersist?.();
 updateThemeIcons();
 updateVizIcons();
 renderPlaylist();
-player.updateControls();
+player.updateControls?.();
 updateFileUIState();
 updateRepeatIcons();
 updateShuffleUi();
@@ -176,21 +176,60 @@ updatePlaybackRateUi();
 // ===============================
 // Events from PlayerCore
 // ===============================
-player.on("playstate", (isPaused) => {
+player.on?.("playstate", (isPaused) => {
   updatePlayPauseIcon(isPaused);
   updateMinimalOverlay(isPaused);
   highlightCurrentTrack();
 });
 
-player.on("trackchange", (index) => {
+player.on?.("trackchange", (index) => {
   updateMainUI(index);
   highlightCurrentTrack();
   setDuration();
 });
 
-player.on("time", ({ currentTime, duration }) => {
+player.on?.("time", ({ currentTime, duration }) => {
   updateProgress(currentTime, duration);
 });
+
+// ===============================
+// ★保険：PlayerCoreが何もしなくても必ず再生する
+// ===============================
+function forceLoadAndPlay(index) {
+  const track = playlist.tracks?.[index];
+  if (!track || !track.file) {
+    showToast("この曲は再生できません（ファイル無し）", true);
+    return false;
+  }
+
+  const a = player.getActiveAudio?.() ?? ui.audioA;
+  if (!a) {
+    showToast("audio要素が見つかりません", true);
+    return false;
+  }
+
+  // src が無い or 違う曲なら張り直す
+  if (!a.src || !a.src.startsWith("blob:") || a.__trackIndex !== index) {
+    try {
+      const url = URL.createObjectURL(track.file);
+      a.src = url;
+      a.__trackIndex = index;
+    } catch (e) {
+      console.error(e);
+      showToast("曲の読み込みに失敗しました", true);
+      return false;
+    }
+  }
+
+  const p = a.play();
+  if (p && p.catch) {
+    p.catch(err => {
+      console.warn("play blocked:", err);
+      showToast("再生がブロックされました。もう一度押してね🙏", true);
+    });
+  }
+  return true;
+}
 
 // ===============================
 // File input
@@ -231,46 +270,77 @@ ui.dropZone?.addEventListener("drop", async (e) => {
 // ===============================
 ui.dropZone?.addEventListener("dblclick", toggleMinimalMode);
 
-// minimal click play/pause (hotfix)
+// minimal click play/pause（保険あり）
 ui.dropZone?.addEventListener("click", () => {
   if (!ui.playerContainer?.classList.contains("minimal")) return;
-  if (playlist.tracks.length === 0) return;
+  if ((playlist.tracks?.length ?? 0) === 0) return;
 
   audioFx.ensureContext?.();
   audioFx.resumeContext?.();
 
   if (playlist.currentTrackIndex === -1) {
     const first = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
-    if (first !== -1) player.loadTrack(first, true);
+    if (first !== -1) {
+      playlist.currentTrackIndex = first;
+      player.loadTrack?.(first, true);
+      forceLoadAndPlay(first);
+      updateMainUI(first);
+      highlightCurrentTrack();
+    }
     return;
   }
-  player.togglePlayPause();
+
+  const a = player.getActiveAudio?.() ?? ui.audioA;
+  if (a?.paused) {
+    player.togglePlayPause?.();
+    if (a.paused) forceLoadAndPlay(playlist.currentTrackIndex);
+  } else {
+    player.togglePlayPause?.();
+  }
 });
 
 // ===============================
-// Play / Pause (hotfix)
+// Play / Pause（強制再生保険あり）
 // ===============================
 ui.playPauseBtn?.addEventListener("click", () => {
-  if (playlist.tracks.length === 0) return;
+  if ((playlist.tracks?.length ?? 0) === 0) return;
 
   audioFx.ensureContext?.();
   audioFx.resumeContext?.();
 
   if (playlist.currentTrackIndex === -1) {
     const first = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
-    if (first !== -1) player.loadTrack(first, true);
+    if (first !== -1) {
+      playlist.currentTrackIndex = first;
+      forceLoadAndPlay(first);
+      player.updateControls?.();
+      updateMainUI(first);
+      highlightCurrentTrack();
+    }
     return;
   }
-  player.togglePlayPause();
+
+  const a = player.getActiveAudio?.() ?? ui.audioA;
+
+  if (!a?.src) {
+    forceLoadAndPlay(playlist.currentTrackIndex);
+    return;
+  }
+
+  player.togglePlayPause?.();
+
+  if (a.paused) {
+    a.play().catch(() => {});
+  }
 });
 
 // Prev / Next
-ui.prevBtn?.addEventListener("click", () => player.playPrev());
-ui.nextBtn?.addEventListener("click", () => player.playNext());
+ui.prevBtn?.addEventListener("click", () => player.playPrev?.());
+ui.nextBtn?.addEventListener("click", () => player.playNext?.());
 
 // Seek ±10
-ui.seekForwardBtn?.addEventListener("click", () => player.seek(10));
-ui.seekBackwardBtn?.addEventListener("click", () => player.seek(-10));
+ui.seekForwardBtn?.addEventListener("click", () => player.seek?.(10));
+ui.seekBackwardBtn?.addEventListener("click", () => player.seek?.(-10));
 
 // Shuffle / Repeat
 ui.shuffleBtn?.addEventListener("click", () => {
@@ -286,7 +356,7 @@ ui.repeatBtn?.addEventListener("click", () => {
 
 // Playback rate
 ui.playbackRateBtn?.addEventListener("click", () => {
-  const rate = player.changePlaybackRate();
+  const rate = player.changePlaybackRate?.() ?? 1;
   updatePlaybackRateUi();
   showToast(`再生速度 ${rate}x`);
 });
@@ -294,24 +364,24 @@ ui.playbackRateBtn?.addEventListener("click", () => {
 // Progress bar preview / commit
 ui.progressBar?.addEventListener("input", (e) => {
   const v = parseFloat(e.target.value || "0");
-  const newTime = player.previewSeek(v);
+  const newTime = player.previewSeek?.(v) ?? 0;
   if (ui.currentTimeDisplay) ui.currentTimeDisplay.textContent = formatTime(newTime);
 });
 ui.progressBar?.addEventListener("change", (e) => {
   const v = parseFloat(e.target.value || "0");
-  player.commitSeek(v);
+  player.commitSeek?.(v);
 });
 
 // Volume slider
 ui.volumeControl?.addEventListener("input", (e) => {
   const v = parseFloat(e.target.value || "1");
-  player.setVolume(v);
+  player.setVolume?.(v);
   updateVolumeIcon(v);
 });
 
 // Mute toggle
 ui.volumeMuteToggle?.addEventListener("click", () => {
-  const v = player.toggleMute();
+  const v = player.toggleMute?.() ?? 0;
   if (ui.volumeControl) ui.volumeControl.value = v;
   updateVolumeIcon(v);
 });
@@ -328,11 +398,11 @@ ui.playlistSearch?.addEventListener("input", (e) => {
 
 // Clear playlist
 ui.clearPlaylistBtn?.addEventListener("click", () => {
-  player.stop();
+  player.stop?.();
   playlist.clearAll?.();
   renderPlaylist();
   resetPlayerUI();
-  player.updateControls();
+  player.updateControls?.();
   togglePlaylist(false);
   showToast("プレイリストをクリアしました");
 });
@@ -399,7 +469,7 @@ ui.removeSelectedBtn?.addEventListener("click", () => {
   if (n > 0) {
     renderPlaylist();
     showToast(`${n}曲削除しました`);
-    if (playlist.tracks.length === 0) resetPlayerUI();
+    if ((playlist.tracks?.length ?? 0) === 0) resetPlayerUI();
   } else {
     showToast("選択されていません", true);
   }
@@ -412,7 +482,7 @@ ui.exportBtn?.addEventListener("click", exportPlaylistJSON);
 ui.importBtn?.addEventListener("click", importPlaylistJSON);
 
 function exportPlaylistJSON() {
-  if (playlist.tracks.length === 0) {
+  if ((playlist.tracks?.length ?? 0) === 0) {
     showToast("プレイリストが空です", true);
     return;
   }
@@ -454,7 +524,7 @@ function importPlaylistJSON() {
       const arr = JSON.parse(text);
       if (!Array.isArray(arr)) throw new Error("Invalid JSON");
 
-      player.stop();
+      player.stop?.();
       playlist.tracks = arr.map(p => ({
         file: null,
         title: p.title || "Imported Track",
@@ -471,7 +541,7 @@ function importPlaylistJSON() {
 
       renderPlaylist();
       resetPlayerUI();
-      player.updateControls();
+      player.updateControls?.();
 
       showToast("プレイリストを読み込みました（曲データは未ロード）");
     } catch (e) {
@@ -486,7 +556,7 @@ function importPlaylistJSON() {
 // Keyboard shortcuts
 document.addEventListener("keydown", (e) => {
   if (e.target === ui.playlistSearch) return;
-  if (playlist.tracks.length === 0) return;
+  if ((playlist.tracks?.length ?? 0) === 0) return;
 
   if (e.code === "Space" && e.target.tagName !== "INPUT") {
     e.preventDefault();
@@ -494,13 +564,13 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.code === "ArrowRight") {
     e.preventDefault();
-    if (e.shiftKey) player.playNext();
-    else player.seek(10);
+    if (e.shiftKey) player.playNext?.();
+    else player.seek?.(10);
   }
   if (e.code === "ArrowLeft") {
     e.preventDefault();
-    if (e.shiftKey) player.playPrev();
-    else player.seek(-10);
+    if (e.shiftKey) player.playPrev?.();
+    else player.seek?.(-10);
   }
 });
 
@@ -515,14 +585,14 @@ async function handleFiles(files) {
     return;
   }
 
-  await playlist.addFiles(mp3s, audioFx);
-  player.updateControls();
+  await playlist.addFiles?.(mp3s, audioFx);
+  player.updateControls?.();
   updateFileUIState();
 
-  // 最初の再生可能曲へ（ghostスキップ）
   const firstPlayable = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
   if (playlist.currentTrackIndex === -1 && firstPlayable !== -1) {
-    player.prepareTrack(firstPlayable);
+    playlist.currentTrackIndex = firstPlayable;
+    player.prepareTrack?.(firstPlayable);
     updateMainUI(firstPlayable);
   }
 
@@ -531,9 +601,9 @@ async function handleFiles(files) {
 }
 
 function toggleMinimalMode() {
-  if (playlist.tracks.length === 0 || !ui.playerContainer) return;
+  if ((playlist.tracks?.length ?? 0) === 0 || !ui.playerContainer) return;
   ui.playerContainer.classList.toggle("minimal");
-  updateMinimalOverlay(player.getActiveAudio().paused);
+  updateMinimalOverlay((player.getActiveAudio?.() ?? ui.audioA)?.paused ?? true);
 }
 
 function togglePlaylist(force) {
@@ -547,7 +617,7 @@ function togglePlaylist(force) {
 
 function updateFileUIState() {
   if (!ui.fileSelectUI) return;
-  ui.fileSelectUI.classList.toggle("file-select-hidden", playlist.tracks.length > 0);
+  ui.fileSelectUI.classList.toggle("file-select-hidden", (playlist.tracks?.length ?? 0) > 0);
 }
 
 function updatePlayPauseIcon(isPaused) {
@@ -572,7 +642,7 @@ function updateMinimalOverlay(isPaused) {
 function updateMainUI(index) {
   if (!ui.songTitle || !ui.songArtist) return;
 
-  if (index < 0 || !playlist.tracks[index]) {
+  if (index < 0 || !playlist.tracks?.[index]) {
     ui.songTitle.textContent = "再生する曲はありません";
     ui.songArtist.textContent = "ファイルをロードしてください";
     resetAlbumArt();
@@ -616,7 +686,7 @@ function updateProgress(currentTime, duration) {
 }
 
 function setDuration() {
-  const a = player.getActiveAudio();
+  const a = player.getActiveAudio?.() ?? ui.audioA;
   if (ui.durationDisplay && a?.duration) {
     ui.durationDisplay.textContent = formatTime(a.duration);
   }
@@ -675,7 +745,7 @@ function renderPlaylist() {
   if (!ui.playlistUl) return;
 
   ui.playlistUl.innerHTML = "";
-  if (playlist.tracks.length === 0) {
+  if ((playlist.tracks?.length ?? 0) === 0) {
     ui.playlistUl.innerHTML = `<li class="placeholder text-center pt-10">曲をドロップしてください</li>`;
     return;
   }
@@ -731,18 +801,26 @@ function renderPlaylist() {
       e.stopPropagation();
       playlist.removeTrack?.(index);
       renderPlaylist();
-      player.updateControls();
-      if (playlist.tracks.length === 0) resetPlayerUI();
+      player.updateControls?.();
+      if ((playlist.tracks?.length ?? 0) === 0) resetPlayerUI();
     });
     li.appendChild(del);
 
+    // ★曲クリックは「PlayerCore→鳴らなければ強制再生」の二段構え
     li.addEventListener("click", () => {
       if (playlist.selectMode) {
         playlist.toggleSelect?.(index);
         renderPlaylist();
         return;
       }
-      player.loadTrack(index, true);
+
+      playlist.currentTrackIndex = index;
+      updateMainUI(index);
+      highlightCurrentTrack();
+
+      player.loadTrack?.(index, true);
+      forceLoadAndPlay(index);
+      player.updateControls?.();
     });
 
     ui.playlistUl.appendChild(li);
