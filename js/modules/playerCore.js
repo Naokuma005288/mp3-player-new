@@ -1,512 +1,289 @@
-import { formatTime, clamp, showToast } from './utils.js';
-import { saveSettings } from './settings.js';
+import { clamp, formatTime } from "./utils.js";
+import { saveSettings } from "./settings.js";
 
-export function createPlayerCore(audioEl, ui, playlistApi, visualizerApi, toastApi) {
-  const {
-    progressBar, playPauseBtn, playIcon, pauseIcon,
-    minimalPlayIcon, minimalPauseIcon, minimalOverlay,
-    currentTimeDisplay, durationDisplay,
-    songTitle, songArtist, albumArt,
-    prevBtn, nextBtn, shuffleBtn, repeatBtn,
-    repeatNoneIcon, repeatAllIcon, repeatOneIcon,
-    seekFwdBtn, seekBackBtn,
-    playbackRateBtn,
-    volumeControl, volumeHighIcon, volumeMuteIcon, volumeMuteToggle,
-    abRepeatBtn,
-    seekTooltip, seekTooltipText,
-    sleepTimerBtn
-  } = ui;
+export function createPlayerCore({
+  audioPlayer,
+  playlistManager,
+  ui,
+  settings,
+  showToast
+}) {
+  let {
+    isShuffle=false,
+    repeatMode="none",
+    playbackRateIndex=0,
+    playbackRates=[1,1.25,1.5,2,0.75],
+    volume=1,
+    lastVolume=1
+  } = settings;
 
-  const { toastEl, toastMsgEl } = toastApi;
-
-  let repeatMode = 'none';
-  let isShuffle = false;
-
-  const playbackRates = [1, 1.25, 1.5, 2, 0.75];
-  let rateIndex = 0;
-
-  let currentObjectURL = null;
-  let lastVolume = 1;
-
-  // A-B repeat state
-  let abStage = 0; // 0=off,1=A set,2=active
-  let abA = null, abB = null;
+  // A-B repeat
+  let abState = "off"; // off | a | ab
+  let pointA = null;
+  let pointB = null;
 
   // sleep timer
-  const sleepSteps = [0, 15, 30, 60, 90];
-  let sleepIndex = 0;
+  let sleepMinutes = 0;
   let sleepTimeout = null;
 
   // fade
-  const FADE_MS = 300;
-  let fadeTimer = null;
-  let baseVolume = audioEl.volume;
+  const FADE_MS = 250;
 
-  function setFadeGain(gain) {
-    audioEl.volume = clamp(baseVolume * gain, 0, 1);
-  }
+  function prepare(index) {
+    const list = playlistManager.getPlaylist();
+    if (!list[index]) return false;
 
-  async function fadeOut() {
-    clearInterval(fadeTimer);
-    return new Promise((resolve) => {
-      const start = performance.now();
-      fadeTimer = setInterval(() => {
-        const t = (performance.now() - start) / FADE_MS;
-        if (t >= 1) {
-          setFadeGain(0);
-          clearInterval(fadeTimer);
-          resolve();
-        } else {
-          setFadeGain(1 - t);
-        }
-      }, 16);
-    });
-  }
-
-  async function fadeIn() {
-    clearInterval(fadeTimer);
-    const start = performance.now();
-    fadeTimer = setInterval(() => {
-      const t = (performance.now() - start) / FADE_MS;
-      if (t >= 1) {
-        setFadeGain(1);
-        clearInterval(fadeTimer);
-      } else {
-        setFadeGain(t);
-      }
-    }, 16);
-  }
-
-  function revokeURL() {
-    if (currentObjectURL) {
-      URL.revokeObjectURL(currentObjectURL);
-      currentObjectURL = null;
-    }
-  }
-
-  function updateMainUI(index) {
-    const list = playlistApi.playlist;
-    if (index < 0 || !list[index]) {
-      songTitle.textContent = '再生する曲はありません';
-      songArtist.textContent = 'ファイルをロードしてください';
-      return;
-    }
-
+    playlistManager.setCurrentIndex(index);
     const track = list[index];
-    songTitle.textContent = track.title;
-    songArtist.textContent = track.artist;
 
-    if (track.artwork) {
-      albumArt.src = track.artwork;
-      albumArt.classList.remove('opacity-20');
-    } else {
-      albumArt.src = 'https://placehold.co/512x512/312e81/ffffff?text=MP3';
-      albumArt.classList.add('opacity-20');
-    }
-  }
-
-  function enableControls() {
-    const disabled = playlistApi.playlist.length === 0;
-    [
-      playPauseBtn, progressBar, prevBtn, nextBtn,
-      shuffleBtn, repeatBtn, seekFwdBtn, seekBackBtn,
-      playbackRateBtn, abRepeatBtn
-    ].forEach(b => b.disabled = disabled);
-  }
-
-  function updateNavButtons() {
-    const len = playlistApi.playlist.length;
-    if (len <= 1) {
-      prevBtn.disabled = true;
-      nextBtn.disabled = true;
-      return;
-    }
-    prevBtn.disabled = false;
-    nextBtn.disabled = false;
-  }
-
-  function updatePlayPauseIcon() {
-    const paused = audioEl.paused || audioEl.ended;
-    playIcon.classList.toggle('hidden', !paused);
-    pauseIcon.classList.toggle('hidden', paused);
-    minimalPlayIcon.classList.toggle('hidden', !paused);
-    minimalPauseIcon.classList.toggle('hidden', paused);
-  }
-
-  function updateMinimalOverlay() {
-    if (!minimalOverlay) return;
-    if (ui.isMinimalMode()) {
-      if (audioEl.paused || audioEl.ended) {
-        minimalOverlay.classList.remove('opacity-0','pointer-events-none');
-        minimalOverlay.classList.add('pointer-events-auto');
-      } else {
-        minimalOverlay.classList.add('opacity-0','pointer-events-none');
-        minimalOverlay.classList.remove('pointer-events-auto');
-      }
-    } else {
-      minimalOverlay.classList.add('opacity-0','pointer-events-none');
-      minimalOverlay.classList.remove('pointer-events-auto');
-    }
-  }
-
-  function setDuration() {
-    durationDisplay.textContent = formatTime(audioEl.duration);
-  }
-
-  function updateProgress() {
-    if (!audioEl.duration) return;
-    const p = (audioEl.currentTime / audioEl.duration) * 100;
-    progressBar.value = p;
-
-    const newTime = formatTime(audioEl.currentTime);
-    currentTimeDisplay.textContent = newTime;
-
-    if (abStage === 2 && abB !== null && audioEl.currentTime >= abB) {
-      audioEl.currentTime = abA ?? 0;
-      audioEl.play();
-    }
-  }
-
-  function seek(sec) {
-    if (audioEl.readyState < 2) return;
-    audioEl.currentTime = clamp(audioEl.currentTime + sec, 0, audioEl.duration);
-  }
-
-  async function prepareTrack(index) {
-    const list = playlistApi.playlist;
-    if (index < 0 || index >= list.length) return false;
-
-    const track = list[index];
     if (!track.file) {
-      showToast(toastEl, toastMsgEl, "この曲は未ロードです。ファイルを再追加してね", true);
+      showToast("この曲のファイルがまだ再リンクされてません", true);
       return false;
     }
 
-    playlistApi.setCurrentIndex(index);
+    const url = URL.createObjectURL(track.file);
+    audioPlayer.src = url;
+    audioPlayer.playbackRate = playbackRates[playbackRateIndex];
 
-    revokeURL();
-    currentObjectURL = URL.createObjectURL(track.file);
-    audioEl.src = currentObjectURL;
-    audioEl.playbackRate = playbackRates[rateIndex];
-
-    updateMainUI(index);
-    updateNavButtons();
-    playlistApi.highlight();
-
+    ui.updateMainUI(index);
+    ui.updateNavButtons();
+    ui.highlight();
     return true;
   }
 
-  async function loadTrack(index, autoplay=true) {
-    if (!playlistApi.playlist.length) return;
-
-    // fade-out current
-    if (!audioEl.paused && !audioEl.ended) {
-      await fadeOut();
-      audioEl.pause();
-    }
-
-    const ok = await prepareTrack(index);
+  async function load(index, autoplay=true) {
+    const ok = prepare(index);
     if (!ok) return;
 
-    if (!visualizerApi.initialized) visualizerApi.init();
-    visualizerApi.resumeIfNeeded();
-
     if (autoplay) {
-      try {
-        await audioEl.play();
-      } catch {
-        updatePlayPauseIcon();
-      }
-      await fadeIn();
-    } else {
-      setFadeGain(1);
+      await audioPlayer.play().catch(()=>{});
     }
-
-    saveLastState();
   }
 
   function togglePlayPause() {
-    if (playlistApi.currentTrackIndex === -1) {
-      loadTrack(0);
-      return;
-    }
-    if (audioEl.paused) audioEl.play();
-    else audioEl.pause();
+    if (audioPlayer.paused) audioPlayer.play();
+    else audioPlayer.pause();
+  }
+
+  function seek(delta) {
+    if (!audioPlayer.duration) return;
+    audioPlayer.currentTime = clamp(audioPlayer.currentTime + delta, 0, audioPlayer.duration);
   }
 
   function playNext() {
-    const idx = playlistApi.getNextIndex(repeatMode);
-    if (idx === -1) {
-      audioEl.pause();
-      playlistApi.setCurrentIndex(-1);
-      updatePlayPauseIcon();
-      return;
+    const list = playlistManager.getPlaylist();
+    if (!list.length) return;
+
+    let nextIndex;
+    const cur = playlistManager.getCurrentIndex();
+
+    if (isShuffle) {
+      const shuf = playlistManager.getShuffled();
+      const sIdx = shuf.indexOf(cur);
+      const nIdx = sIdx + 1;
+
+      if (nIdx >= shuf.length) {
+        if (repeatMode === "all") {
+          playlistManager.createShuffled();
+          nextIndex = playlistManager.getShuffled()[0];
+        } else {
+          audioPlayer.pause();
+          playlistManager.setCurrentIndex(-1);
+          return;
+        }
+      } else {
+        nextIndex = shuf[nIdx];
+      }
+    } else {
+      nextIndex = cur + 1;
+      if (nextIndex >= list.length) {
+        if (repeatMode === "all") nextIndex = 0;
+        else {
+          audioPlayer.pause();
+          playlistManager.setCurrentIndex(-1);
+          return;
+        }
+      }
     }
-    loadTrack(idx);
+
+    loadWithFade(nextIndex);
   }
 
   function playPrev() {
-    if (audioEl.currentTime > 5) {
-      audioEl.currentTime = 0;
+    const list = playlistManager.getPlaylist();
+    if (!list.length) return;
+
+    const cur = playlistManager.getCurrentIndex();
+    if (audioPlayer.currentTime > 5) {
+      audioPlayer.currentTime = 0;
       return;
     }
-    const idx = playlistApi.getPrevIndex(repeatMode);
-    loadTrack(idx);
+
+    let prevIndex;
+    if (isShuffle) {
+      const shuf = playlistManager.getShuffled();
+      const sIdx = shuf.indexOf(cur);
+      const pIdx = sIdx - 1;
+      prevIndex = (pIdx < 0) ? shuf[shuf.length-1] : shuf[pIdx];
+    } else {
+      prevIndex = cur - 1;
+      if (prevIndex < 0) prevIndex = (repeatMode === "all") ? list.length-1 : 0;
+    }
+
+    loadWithFade(prevIndex);
+  }
+
+  async function loadWithFade(index) {
+    const startVol = audioPlayer.volume;
+    const step = startVol / (FADE_MS/16);
+
+    // fade out
+    let v = startVol;
+    const outTimer = setInterval(()=>{
+      v = Math.max(0, v - step);
+      audioPlayer.volume = v;
+    }, 16);
+
+    setTimeout(async ()=>{
+      clearInterval(outTimer);
+      await load(index, true);
+
+      // fade in
+      let v2 = 0;
+      audioPlayer.volume = 0;
+      const inStep = startVol / (FADE_MS/16);
+      const inTimer = setInterval(()=>{
+        v2 = Math.min(startVol, v2 + inStep);
+        audioPlayer.volume = v2;
+        if (v2 >= startVol) clearInterval(inTimer);
+      }, 16);
+    }, FADE_MS);
   }
 
   function toggleShuffle() {
     isShuffle = !isShuffle;
-    shuffleBtn.classList.toggle('btn-active', isShuffle);
-    playlistApi.setShuffle(isShuffle);
-    if (isShuffle) playlistApi.createShuffled();
-    saveLastState();
+    if (isShuffle) playlistManager.createShuffled();
+    ui.setShuffle(isShuffle);
+    persist();
   }
 
   function toggleRepeat() {
-    repeatNoneIcon.classList.add('hidden');
-    repeatAllIcon.classList.add('hidden');
-    repeatOneIcon.classList.add('hidden');
-
-    if (repeatMode === 'none') {
-      repeatMode = 'all';
-      repeatAllIcon.classList.remove('hidden');
-    } else if (repeatMode === 'all') {
-      repeatMode = 'one';
-      repeatOneIcon.classList.remove('hidden');
-    } else {
-      repeatMode = 'none';
-      repeatNoneIcon.classList.remove('hidden');
-    }
-    updateNavButtons();
-    saveLastState();
+    repeatMode = repeatMode === "none" ? "all" : (repeatMode === "all" ? "one" : "none");
+    ui.setRepeat(repeatMode);
+    ui.updateNavButtons();
+    persist();
   }
 
-  function changePlaybackRate() {
-    rateIndex = (rateIndex + 1) % playbackRates.length;
-    audioEl.playbackRate = playbackRates[rateIndex];
-    playbackRateBtn.textContent = `${playbackRates[rateIndex]}x`;
-    saveLastState();
+  function changeRate() {
+    playbackRateIndex = (playbackRateIndex + 1) % playbackRates.length;
+    audioPlayer.playbackRate = playbackRates[playbackRateIndex];
+    ui.setRate(playbackRates[playbackRateIndex]);
+    persist();
   }
 
-  function updateVolumeIcon(v) {
-    if (v === 0) {
-      volumeHighIcon.classList.add('hidden');
-      volumeMuteIcon.classList.remove('hidden');
-    } else {
-      volumeHighIcon.classList.remove('hidden');
-      volumeMuteIcon.classList.add('hidden');
-    }
-  }
-
-  function onVolumeInput(v) {
-    baseVolume = v;
-    audioEl.volume = v;
+  function setVolume(v) {
+    audioPlayer.volume = v;
     if (v > 0) lastVolume = v;
-    updateVolumeIcon(v);
-    saveLastState();
+    ui.setVolumeIcon(v);
+    persist();
   }
 
   function toggleMute() {
-    if (audioEl.volume > 0) {
-      audioEl.volume = 0;
-    } else {
-      audioEl.volume = lastVolume;
-    }
-    volumeControl.value = audioEl.volume;
-    baseVolume = audioEl.volume;
-    updateVolumeIcon(audioEl.volume);
-    saveLastState();
+    if (audioPlayer.volume > 0) setVolume(0);
+    else setVolume(lastVolume || 1);
+    ui.setVolumeSlider(audioPlayer.volume);
   }
 
-  // A-B repeat
-  function toggleABRepeat() {
-    if (!audioEl.duration) return;
-    if (abStage === 0) {
-      abA = audioEl.currentTime;
-      abB = null;
-      abStage = 1;
-      abRepeatBtn.classList.add('btn-active');
-      showToast(toastEl, toastMsgEl, `A点セット: ${formatTime(abA)}`);
-    } else if (abStage === 1) {
-      const b = audioEl.currentTime;
-      if (b <= abA + 0.5) {
-        showToast(toastEl, toastMsgEl, "B点はA点より後にしてね", true);
-        return;
-      }
-      abB = b;
-      abStage = 2;
-      abRepeatBtn.classList.add('btn-active');
-      showToast(toastEl, toastMsgEl, `B点セット: ${formatTime(abB)} / A-B ON`);
+  // A-B Repeat toggle
+  function toggleAB() {
+    if (abState === "off") {
+      abState = "a";
+      pointA = audioPlayer.currentTime;
+      showToast(`A点セット: ${formatTime(pointA)}`);
+    } else if (abState === "a") {
+      abState = "ab";
+      pointB = audioPlayer.currentTime;
+      if (pointB <= pointA + 0.2) pointB = pointA + 1;
+      showToast(`B点セット: ${formatTime(pointB)}`);
     } else {
-      abStage = 0;
-      abA = null; abB = null;
-      abRepeatBtn.classList.remove('btn-active');
-      showToast(toastEl, toastMsgEl, "A-B OFF");
+      abState = "off";
+      pointA = pointB = null;
+      showToast("A–BリピートOFF");
     }
-    saveLastState();
+    ui.setABState(abState);
+  }
+
+  function onTimeUpdate() {
+    if (abState === "ab" && pointA != null && pointB != null) {
+      if (audioPlayer.currentTime >= pointB) {
+        audioPlayer.currentTime = pointA;
+      }
+    }
   }
 
   // Sleep timer
   function cycleSleepTimer() {
-    sleepIndex = (sleepIndex + 1) % sleepSteps.length;
-    const mins = sleepSteps[sleepIndex];
-    clearTimeout(sleepTimeout);
+    const values = [0,15,30,60,90];
+    const idx = values.indexOf(sleepMinutes);
+    sleepMinutes = values[(idx+1)%values.length];
 
-    if (mins === 0) {
-      sleepTimerBtn.textContent = "🌙 OFF";
-      showToast(toastEl, toastMsgEl, "スリープタイマー OFF");
-    } else {
-      sleepTimerBtn.textContent = `🌙 ${mins}m`;
-      showToast(toastEl, toastMsgEl, `${mins}分後に停止します`);
-      sleepTimeout = setTimeout(() => {
-        audioEl.pause();
-        showToast(toastEl, toastMsgEl, "スリープタイマーで停止しました");
-      }, mins * 60 * 1000);
+    if (sleepTimeout) clearTimeout(sleepTimeout);
+    if (sleepMinutes > 0) {
+      sleepTimeout = setTimeout(()=>{
+        audioPlayer.pause();
+        showToast("スリープタイマーで停止しました");
+        sleepMinutes = 0;
+        ui.setSleepLabel(sleepMinutes);
+        persist();
+      }, sleepMinutes*60*1000);
     }
-    saveLastState();
+    ui.setSleepLabel(sleepMinutes);
+    persist();
   }
 
-  // Seek tooltip
-  function setupSeekTooltip() {
-    const bar = progressBar;
-    const tip = seekTooltip;
-    const tipText = seekTooltipText;
-    if (!bar || !tip || !tipText) return;
-
-    function show(e) {
-      if (!audioEl.duration) return;
-      const rect = bar.getBoundingClientRect();
-      const x = clamp((e.clientX ?? e.touches?.[0]?.clientX) - rect.left, 0, rect.width);
-      const ratio = x / rect.width;
-      const t = audioEl.duration * ratio;
-
-      tipText.textContent = formatTime(t);
-      tip.style.left = `${x}px`;
-      tip.classList.remove('hidden');
-    }
-    function hide() {
-      tip.classList.add('hidden');
-    }
-
-    bar.addEventListener('mousemove', show);
-    bar.addEventListener('mouseenter', show);
-    bar.addEventListener('mouseleave', hide);
-
-    bar.addEventListener('touchmove', show, { passive: true });
-    bar.addEventListener('touchend', hide);
-  }
-
-  function saveLastState() {
-    const state = getLastState();
-    saveSettings(state);
-    playlistApi.savePlaylistState(state);
-  }
-
-  function getLastState() {
-    return {
-      volume: baseVolume,
-      lastVolume,
-      repeatMode,
+  function persist() {
+    saveSettings({
+      ...settings,
       isShuffle,
-      playbackRateIndex: rateIndex,
-      currentTrackIndex: playlistApi.currentTrackIndex,
-      currentTime: audioEl.currentTime || 0,
-      abStage, abA, abB,
-      sleepIndex,
-      visualizerStyle: ui.getVisualizerStyle(),
-      theme: ui.getTheme()
-    };
+      repeatMode,
+      playbackRateIndex,
+      volume: audioPlayer.volume,
+      lastVolume,
+      sleepMinutes
+    });
   }
 
-  function restoreLastState(state) {
-    if (!state) return;
-    repeatMode = state.repeatMode ?? 'none';
-    isShuffle = state.isShuffle ?? false;
-    rateIndex = state.playbackRateIndex ?? 0;
-    baseVolume = state.volume ?? 1;
-    lastVolume = state.lastVolume ?? 1;
+  function restore() {
+    setVolume(volume ?? 1);
+    playbackRateIndex = playbackRateIndex ?? 0;
+    audioPlayer.playbackRate = playbackRates[playbackRateIndex];
 
-    audioEl.volume = baseVolume;
-    volumeControl.value = baseVolume;
-    updateVolumeIcon(baseVolume);
-
-    playbackRateBtn.textContent = `${playbackRates[rateIndex]}x`;
-    shuffleBtn.classList.toggle('btn-active', isShuffle);
-
-    // repeat icon apply by cycling
-    repeatNoneIcon.classList.add('hidden');
-    repeatAllIcon.classList.add('hidden');
-    repeatOneIcon.classList.add('hidden');
-    if (repeatMode === 'all') repeatAllIcon.classList.remove('hidden');
-    else if (repeatMode === 'one') repeatOneIcon.classList.remove('hidden');
-    else repeatNoneIcon.classList.remove('hidden');
-
-    // AB
-    abStage = state.abStage ?? 0;
-    abA = state.abA ?? null;
-    abB = state.abB ?? null;
-    abRepeatBtn.classList.toggle('btn-active', abStage !== 0);
-
-    // sleep timer
-    sleepIndex = state.sleepIndex ?? 0;
-    const mins = sleepSteps[sleepIndex];
-    sleepTimerBtn.textContent = mins === 0 ? "🌙 OFF" : `🌙 ${mins}m`;
+    ui.setRate(playbackRates[playbackRateIndex]);
+    ui.setShuffle(isShuffle);
+    ui.setRepeat(repeatMode);
+    ui.setSleepLabel(sleepMinutes);
   }
 
-  // --- audio events ---
-  audioEl.addEventListener('play', () => {
-    updatePlayPauseIcon();
-    updateMinimalOverlay();
-    playlistApi.highlight();
-  });
-  audioEl.addEventListener('pause', () => {
-    updatePlayPauseIcon();
-    updateMinimalOverlay();
-  });
-  audioEl.addEventListener('timeupdate', updateProgress);
-  audioEl.addEventListener('loadedmetadata', setDuration);
-  audioEl.addEventListener('ended', () => {
-    if (repeatMode === 'one') {
-      audioEl.currentTime = 0;
-      audioEl.play();
+  function onEnded() {
+    if (repeatMode === "one") {
+      audioPlayer.currentTime = 0;
+      audioPlayer.play();
     } else {
       playNext();
     }
-  });
+  }
 
-  // progress bar
-  progressBar.addEventListener('input', (e) => {
-    if (!audioEl.duration) return;
-    const newTime = audioEl.duration * (e.target.value / 100);
-    currentTimeDisplay.textContent = formatTime(newTime);
-  });
-  progressBar.addEventListener('change', (e) => {
-    if (!audioEl.duration) return;
-    audioEl.currentTime = audioEl.duration * (e.target.value / 100);
-    saveLastState();
-  });
-
-  setupSeekTooltip();
+  restore();
 
   return {
-    loadTrack,
-    togglePlayPause,
-    playNext,
-    playPrev,
-    toggleShuffle,
-    toggleRepeat,
-    changePlaybackRate,
-    seek,
-    onVolumeInput,
-    toggleMute,
-    toggleABRepeat,
+    load, togglePlayPause, seek, playNext, playPrev,
+    toggleShuffle, toggleRepeat, changeRate,
+    setVolume, toggleMute,
+    toggleAB, onTimeUpdate, onEnded,
     cycleSleepTimer,
-    enableControls,
-    updateNavButtons,
-    updateMainUI,
-    prepareTrack,
-    restoreLastState,
-    getLastState,
-    revokeURL,
+    get repeatMode(){ return repeatMode; },
+    get isShuffle(){ return isShuffle; },
+    get playbackRates(){ return playbackRates; },
+    get playbackRateIndex(){ return playbackRateIndex; }
   };
 }

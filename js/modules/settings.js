@@ -1,10 +1,11 @@
-const SETTINGS_KEY = 'mp3PlayerSettings_v3_4';
+const SETTINGS_KEY = "mp3PlayerSettings_v3_5";
+const PLAYLIST_KEY = "mp3PlayerPlaylist_v3_5";
 
-export function saveSettings(state) {
+export function saveSettings(settings) {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(state));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch (e) {
-    console.error('saveSettings failed', e);
+    console.error("設定保存失敗", e);
   }
 }
 
@@ -13,28 +14,35 @@ export function loadSettings() {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return null;
     return JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    console.error("設定読み込み失敗", e);
     return null;
   }
 }
 
-/** theme: 'normal' | 'light' | 'dark' */
-export function applyTheme(theme) {
-  const root = document.documentElement;
-  root.classList.remove('light-mode', 'dark-mode');
-  if (theme === 'light') root.classList.add('light-mode');
-  if (theme === 'dark') root.classList.add('dark-mode');
+export function savePlaylist(playlist) {
+  try {
+    const serial = playlist.map(t => ({
+      title: t.title,
+      artist: t.artist,
+      artwork: t.artwork,
+      duration: t.duration,
+      signature: t.signature,
+      originalOrder: t.originalOrder ?? 0
+    }));
+    localStorage.setItem(PLAYLIST_KEY, JSON.stringify(serial));
+  } catch (e) {
+    console.error("プレイリスト保存失敗", e);
+  }
 }
 
-export function cycleTheme(currentTheme) {
-  if (currentTheme === 'normal') return 'light';
-  if (currentTheme === 'light') return 'dark';
-  return 'normal';
-}
-
-export function updateThemeIcons(theme, icons) {
-  const { normalIcon, sunIcon, moonIcon } = icons;
-  normalIcon.classList.toggle('hidden', theme !== 'normal');
-  sunIcon.classList.toggle('hidden', theme !== 'light');
-  moonIcon.classList.toggle('hidden', theme !== 'dark');
+export function loadPlaylist() {
+  try {
+    const raw = localStorage.getItem(PLAYLIST_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("プレイリスト読み込み失敗", e);
+    return [];
+  }
 }

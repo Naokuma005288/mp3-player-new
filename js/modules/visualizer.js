@@ -1,38 +1,22 @@
-import { debounce } from './utils.js';
+import { clamp } from "./utils.js";
 
-export function createVisualizer(audioEl, canvasEl, opts = {}) {
-  const FFT_SIZE = opts.fftSize ?? 512;
-  let audioContext = null;
-  let analyser = null;
-  let source = null;
+export function createVisualizer({ audioPlayer, canvas, getThemeVars }) {
+  const ctx = canvas.getContext("2d");
+  let audioContext, analyser, source, freqData;
   let bufferLength = 0;
-  let frequencyData = null;
   let initialized = false;
-  let style = opts.style ?? 'line';
-
-  const ctx = canvasEl.getContext('2d');
-
-  function setupCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    const { offsetWidth, offsetHeight } = canvasEl.parentElement;
-    canvasEl.width = offsetWidth * dpr;
-    canvasEl.height = offsetHeight * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  const onResize = debounce(() => initialized && setupCanvas(), 150);
-  window.addEventListener('resize', onResize);
+  let style = "line";
+  const FFT_SIZE = 512;
 
   function init() {
     if (initialized) return;
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    source = audioContext.createMediaElementSource(audioEl);
+    source = audioContext.createMediaElementSource(audioPlayer);
     analyser = audioContext.createAnalyser();
     analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0.85;
-
     bufferLength = analyser.frequencyBinCount;
-    frequencyData = new Uint8Array(bufferLength);
+    freqData = new Uint8Array(bufferLength);
 
     source.connect(analyser);
     analyser.connect(audioContext.destination);
@@ -42,61 +26,68 @@ export function createVisualizer(audioEl, canvasEl, opts = {}) {
     draw();
   }
 
-  function resumeIfNeeded() {
-    if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+  function setupCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const { offsetWidth, offsetHeight } = canvas.parentElement;
+    canvas.width = offsetWidth * dpr;
+    canvas.height = offsetHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function setStyle(next) {
-    style = next;
+  function setStyle(newStyle) {
+    style = newStyle;
+  }
+
+  function resumeIfNeeded() {
+    if (audioContext && audioContext.state === "suspended") audioContext.resume();
   }
 
   function draw() {
     requestAnimationFrame(draw);
+    if (!initialized || audioPlayer.paused) {
+      const rect = canvas.getBoundingClientRect();
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      return;
+    }
 
-    const { width, height } = canvasEl.getBoundingClientRect();
+    analyser.getByteFrequencyData(freqData);
+
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
     ctx.clearRect(0, 0, width, height);
 
-    if (!initialized || audioEl.paused) return;
-
-    analyser.getByteFrequencyData(frequencyData);
-
-    const styles = getComputedStyle(document.documentElement);
-    const c1 = styles.getPropertyValue('--viz-grad-1').trim();
-    const c2 = styles.getPropertyValue('--viz-grad-2').trim();
-    const c3 = styles.getPropertyValue('--viz-grad-3').trim();
-
+    const { grad1, grad2, grad3 } = getThemeVars();
     const gradHeight = height * 0.40;
-    const gradient = ctx.createLinearGradient(0, gradHeight, 0, 0);
-    gradient.addColorStop(0, c1);
-    gradient.addColorStop(0.5, c2);
-    gradient.addColorStop(1, c3);
+    const grad = ctx.createLinearGradient(0, gradHeight, 0, 0);
+    grad.addColorStop(0, grad1);
+    grad.addColorStop(0.5, grad2);
+    grad.addColorStop(1, grad3);
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = grad;
+    ctx.lineCap = "round";
 
-    ctx.fillStyle = gradient;
-    ctx.strokeStyle = gradient;
-    ctx.lineCap = 'round';
-
-    if (style === 'bars') drawBars(width, height);
-    else drawLine(width, height, gradHeight);
+    if (style === "line") drawLine(width, height, gradHeight);
+    else drawBars(width, height);
   }
 
   function drawLine(width, height, gradHeight) {
     ctx.lineWidth = 3;
     const active = Math.floor(bufferLength / 2);
-    const sliceW = (width / 2) / active;
+    const slice = (width / 2) / active;
 
     ctx.beginPath();
-
     for (let i = active - 1; i >= 0; i--) {
-      const n = frequencyData[i] / 255;
-      const h = Math.pow(n, 1.5) * gradHeight * 0.9;
-      const x = (width / 2) - ((active - i) * sliceW);
-      ctx.lineTo(x, height - h);
+      const n = freqData[i] / 255;
+      const bh = Math.pow(n, 1.5) * gradHeight * 0.9;
+      const x = (width / 2) - ((active - i) * slice);
+      ctx.lineTo(x, height - bh);
     }
     for (let i = 0; i < active; i++) {
-      const n = frequencyData[i] / 255;
-      const h = Math.pow(n, 1.5) * gradHeight * 0.9;
-      const x = (width / 2) + (i * sliceW);
-      ctx.lineTo(x, height - h);
+      const n = freqData[i] / 255;
+      const bh = Math.pow(n, 1.5) * gradHeight * 0.9;
+      const x = (width / 2) + (i * slice);
+      ctx.lineTo(x, height - bh);
     }
     ctx.stroke();
   }
@@ -107,16 +98,13 @@ export function createVisualizer(audioEl, canvasEl, opts = {}) {
     const active = Math.floor(bufferLength / 1.5);
 
     for (let i = 0; i < active; i++) {
-      const h = (frequencyData[i] / 255) * height * 0.4;
-      ctx.fillRect(x, height - h, barW, h);
+      const bh = clamp(freqData[i] / 255, 0, 1) * height * 0.4;
+      ctx.fillRect(x, height - bh, barW, bh);
       x += barW + 1;
     }
   }
 
-  return {
-    init,
-    resumeIfNeeded,
-    setStyle,
-    get initialized() { return initialized; }
-  };
+  window.addEventListener("resize", () => initialized && setupCanvas());
+
+  return { init, setStyle, resumeIfNeeded, get initialized(){ return initialized; } };
 }

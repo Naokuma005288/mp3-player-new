@@ -1,438 +1,396 @@
-import {
-  signatureForFile,
-  readID3,
-  getDurationOfFile,
-  formatTime
-} from './utils.js';
+import { readID3, extractArtworkUrl, formatTime, getFileSignature, signatureToKey } from "./utils.js";
+import { savePlaylist, loadPlaylist } from "./settings.js";
 
-const PLAYLIST_KEY = 'mp3PlayerPlaylist_v3_4';
-
-export function createPlaylist(ui, callbacks) {
-  const {
-    ul, searchInput
-  } = ui;
-
+export function createPlaylistManager({
+  playlistUl,
+  searchInput,
+  onSelectTrack,
+  onPlaylistUpdated,
+  showToast
+}) {
   let playlist = [];
-  let currentTrackIndex = -1;
+  let currentIndex = -1;
+
+  // v3.5.0: sort / group
+  let sortMode = "added";
+  let groupByArtist = false;
+  const collapsedGroups = new Set();
+
+  // shuffle support
   let shuffled = [];
-  let isShuffle = false;
 
-  // --- persistence ---
-  function savePlaylistState(lastState = {}) {
-    const meta = playlist.map(t => ({
-      sig: t.sig,
-      title: t.title,
-      artist: t.artist,
-      artwork: t.artwork,
-      duration: t.duration,
-      missing: !t.file
-    }));
-    const payload = {
-      meta,
-      lastState
-    };
-    localStorage.setItem(PLAYLIST_KEY, JSON.stringify(payload));
-  }
-
-  function loadPlaylistState() {
-    try {
-      const raw = localStorage.getItem(PLAYLIST_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  function restoreFromStorage() {
-    const data = loadPlaylistState();
-    if (!data?.meta) return null;
-
-    playlist = data.meta.map(m => ({
+  function initFromStorage() {
+    const stored = loadPlaylist();
+    playlist = stored.map((t, i) => ({
       file: null,
-      sig: m.sig,
-      title: m.title ?? '未ロード',
-      artist: m.artist ?? '未ロード',
-      artwork: m.artwork ?? null,
-      duration: m.duration ?? null,
-      missing: m.missing ?? true
+      title: t.title || t.signature?.name || `Track ${i+1}`,
+      artist: t.artist || "不明なアーティスト",
+      artwork: t.artwork || null,
+      duration: t.duration ?? null,
+      signature: t.signature || null,
+      key: t.signature ? signatureToKey(t.signature) : null,
+      originalOrder: t.originalOrder ?? i
     }));
     render();
-    return data.lastState ?? null;
   }
 
-  // --- add files ---
-  async function addFiles(files) {
-    const mp3Files = Array.from(files).filter(f => f.type === 'audio/mpeg');
+  async function handleFiles(files) {
+    const mp3s = Array.from(files).filter(f => f.type === "audio/mpeg" || f.name.toLowerCase().endsWith(".mp3"));
+    if (!mp3s.length) {
+      showToast("MP3ファイルのみ対応しています", true);
+      return;
+    }
 
-    for (const file of mp3Files) {
-      const sig = signatureForFile(file);
+    const wasEmpty = playlist.length === 0;
 
-      // 既存の missing とマッチしたら置換
-      const missIdx = playlist.findIndex(t => t.missing && t.sig === sig);
-      if (missIdx >= 0) {
-        playlist[missIdx].file = file;
-        playlist[missIdx].missing = false;
-        await fillMetadata(missIdx);
+    for (const file of mp3s) {
+      const sig = getFileSignature(file);
+      const key = signatureToKey(sig);
+
+      // 同じ署名の曲がすでにある場合は「再リンク復元」
+      const existing = playlist.findIndex(t => t.key === key);
+      if (existing !== -1) {
+        playlist[existing].file = file;
         continue;
       }
 
       const track = {
         file,
-        sig,
         title: file.name,
-        artist: 'ロード中...',
+        artist: "ロード中...",
         artwork: null,
         duration: null,
-        missing: false
+        signature: sig,
+        key,
+        originalOrder: playlist.length
       };
       playlist.push(track);
       const idx = playlist.length - 1;
-      await fillMetadata(idx);
+
+      // メタデータ
+      readMetadata(file, idx);
+      // 長さ
+      getDuration(file, idx);
     }
 
-    if (isShuffle) createShuffled();
-    render();
-    callbacks.onPlaylistChanged(playlist);
+    applySort(sortMode, false);
+    if (groupByArtist) render();
+    showToast(`${mp3s.length} 曲が追加されました`);
+    savePlaylist(playlist);
+
+    if (wasEmpty && playlist.length > 0) {
+      setCurrentIndex(0);
+      onSelectTrack(0, false);
+    }
+
+    onPlaylistUpdated();
   }
 
-  async function fillMetadata(index) {
-    const track = playlist[index];
-    if (!track?.file) return;
+  async function readMetadata(file, index) {
+    const tags = await readID3(file);
+    if (!playlist[index]) return;
 
-    const tags = await readID3(track.file);
-    let artworkUrl = null;
+    playlist[index].title = tags.title || file.name;
+    playlist[index].artist = tags.artist || "不明なアーティスト";
+    playlist[index].artwork = extractArtworkUrl(tags);
 
-    if (tags?.picture) {
-      const { data, format } = tags.picture;
-      let base64 = "";
-      for (let i = 0; i < data.length; i++) base64 += String.fromCharCode(data[i]);
-      artworkUrl = `data:${format};base64,${window.btoa(base64)}`;
-    }
-
-    track.title = tags?.title || track.file.name;
-    track.artist = tags?.artist || '不明なアーティスト';
-    track.artwork = artworkUrl;
-
-    track.duration = await getDurationOfFile(track.file);
-
+    savePlaylist(playlist);
     render();
+  }
+
+  function getDuration(file, index) {
+    const temp = new Audio();
+    const url = URL.createObjectURL(file);
+    temp.src = url;
+
+    temp.addEventListener("loadedmetadata", () => {
+      if (playlist[index]) {
+        playlist[index].duration = temp.duration;
+        savePlaylist(playlist);
+        render();
+      }
+      URL.revokeObjectURL(url);
+    }, { once: true });
+
+    temp.addEventListener("error", () => URL.revokeObjectURL(url), { once: true });
   }
 
   function removeTrack(index) {
     if (index < 0 || index >= playlist.length) return;
-    const wasPlaying = index === currentTrackIndex;
+    const wasPlaying = index === currentIndex;
 
     playlist.splice(index, 1);
+    if (wasPlaying) currentIndex = Math.min(index, playlist.length - 1);
 
-    if (wasPlaying) callbacks.onRemovedPlaying(index, playlist.length);
-    else if (index < currentTrackIndex) currentTrackIndex--;
-
-    if (isShuffle) createShuffled();
+    savePlaylist(playlist);
     render();
-    callbacks.onPlaylistChanged(playlist);
+    onPlaylistUpdated();
+
+    if (wasPlaying && playlist.length > 0) onSelectTrack(currentIndex, true);
+    if (playlist.length === 0) onSelectTrack(-1, false);
   }
 
   function clearAll() {
     playlist = [];
-    currentTrackIndex = -1;
-    shuffled = [];
+    currentIndex = -1;
+    savePlaylist(playlist);
     render();
-    callbacks.onPlaylistChanged(playlist);
+    onPlaylistUpdated();
+    onSelectTrack(-1, false);
   }
 
   function setCurrentIndex(i) {
-    currentTrackIndex = i;
+    currentIndex = i;
     highlight();
   }
 
-  function setShuffle(flag) {
-    isShuffle = flag;
-    if (isShuffle) createShuffled();
-  }
+  function getCurrentIndex() { return currentIndex; }
+  function getPlaylist() { return playlist; }
 
   function createShuffled() {
-    const current = currentTrackIndex !== -1 ? [currentTrackIndex] : [];
-    let rest = playlist.map((_, i) => i).filter(i => i !== currentTrackIndex);
+    const cur = currentIndex !== -1 ? [currentIndex] : [];
+    let rest = playlist.map((_, i) => i).filter(i => i !== currentIndex);
     for (let i = rest.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [rest[i], rest[j]] = [rest[j], rest[i]];
     }
-    shuffled = [...current, ...rest];
+    shuffled = [...cur, ...rest];
   }
 
-  function getNextIndex(repeatMode) {
-    if (!playlist.length) return -1;
+  function getShuffled() { return shuffled; }
 
-    if (isShuffle) {
-      const curS = shuffled.indexOf(currentTrackIndex);
-      let nextS = curS + 1;
-      if (nextS >= shuffled.length) {
-        if (repeatMode === 'all') {
-          createShuffled();
-          return shuffled[0];
-        }
-        return -1;
-      }
-      return shuffled[nextS];
+  // v3.5.0 sort
+  function applySort(mode, save = true) {
+    sortMode = mode;
+
+    if (mode === "added") {
+      playlist.sort((a,b) => (a.originalOrder ?? 0) - (b.originalOrder ?? 0));
+    }
+    if (mode === "title") {
+      playlist.sort((a,b) => a.title.localeCompare(b.title, "ja"));
+    }
+    if (mode === "artist") {
+      playlist.sort((a,b) => a.artist.localeCompare(b.artist, "ja"));
+    }
+    if (mode === "duration") {
+      playlist.sort((a,b) => (a.duration ?? 0) - (b.duration ?? 0));
     }
 
-    let next = currentTrackIndex + 1;
-    if (next >= playlist.length) {
-      if (repeatMode === 'all') return 0;
-      return -1;
-    }
-    return next;
-  }
-
-  function getPrevIndex(repeatMode) {
-    if (!playlist.length) return -1;
-
-    if (isShuffle) {
-      const curS = shuffled.indexOf(currentTrackIndex);
-      let prevS = curS - 1;
-      if (prevS < 0) {
-        if (repeatMode === 'all') return shuffled[shuffled.length - 1];
-        return shuffled[shuffled.length - 1];
-      }
-      return shuffled[prevS];
+    // 再生中 index の再追跡
+    if (currentIndex !== -1) {
+      const key = playlist[currentIndex]?.key;
+      const newIdx = playlist.findIndex(t => t.key === key);
+      currentIndex = newIdx;
     }
 
-    let prev = currentTrackIndex - 1;
-    if (prev < 0) {
-      if (repeatMode === 'all') return playlist.length - 1;
-      return 0;
-    }
-    return prev;
-  }
-
-  function filterList(q) {
-    const query = q.toLowerCase();
-    ul.querySelectorAll('li.playlist-item').forEach(li => {
-      const idx = parseInt(li.dataset.index);
-      const t = playlist[idx];
-      if (!t) return;
-      const m = (t.title || '').toLowerCase().includes(query) ||
-                (t.artist || '').toLowerCase().includes(query);
-      li.classList.toggle('hidden', !m);
-    });
-  }
-
-  // --- drag reorder ---
-  let draggingIndex = null;
-  let touchDragging = false;
-  let touchHoldTimer = null;
-
-  function onDragStart(e) {
-    draggingIndex = parseInt(e.currentTarget.dataset.index);
-    e.currentTarget.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  function onDragEnd(e) {
-    e.currentTarget.classList.remove('dragging');
-    clearDragOver();
-    draggingIndex = null;
-  }
-  function onDragOver(e) {
-    e.preventDefault();
-    const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
-    const before = (e.clientY - rect.top) < rect.height / 2;
-    clearDragOver();
-
-    target.classList.add(before ? 'drag-over-top' : 'drag-over-bottom');
-  }
-  function onDrop(e) {
-    e.preventDefault();
-    const targetIndex = parseInt(e.currentTarget.dataset.index);
-    if (draggingIndex === null || draggingIndex === targetIndex) return;
-
-    const item = playlist.splice(draggingIndex, 1)[0];
-    const insertAt = draggingIndex < targetIndex ? targetIndex : targetIndex;
-    playlist.splice(insertAt, 0, item);
-
-    // current index adjust
-    if (currentTrackIndex === draggingIndex) currentTrackIndex = insertAt;
-    else {
-      if (draggingIndex < currentTrackIndex && insertAt >= currentTrackIndex) currentTrackIndex--;
-      if (draggingIndex > currentTrackIndex && insertAt <= currentTrackIndex) currentTrackIndex++;
-    }
-
-    if (isShuffle) createShuffled();
+    if (save) savePlaylist(playlist);
     render();
-    callbacks.onPlaylistChanged(playlist);
   }
 
-  // touch long-press drag
-  function onHandleTouchStart(e) {
-    const li = e.currentTarget.closest('li.playlist-item');
-    const idx = parseInt(li.dataset.index);
-
-    touchHoldTimer = setTimeout(() => {
-      touchDragging = true;
-      draggingIndex = idx;
-      li.classList.add('dragging');
-    }, 250);
-  }
-  function onHandleTouchMove(e) {
-    if (!touchDragging) return;
-    e.preventDefault();
-
-    const t = e.touches[0];
-    const el = document.elementFromPoint(t.clientX, t.clientY);
-    const li = el?.closest?.('li.playlist-item');
-    if (!li) return;
-
-    const rect = li.getBoundingClientRect();
-    const before = (t.clientY - rect.top) < rect.height / 2;
-    clearDragOver();
-    li.classList.add(before ? 'drag-over-top' : 'drag-over-bottom');
-  }
-  function onHandleTouchEnd(e) {
-    clearTimeout(touchHoldTimer);
-    if (!touchDragging) return;
-
-    const t = e.changedTouches[0];
-    const el = document.elementFromPoint(t.clientX, t.clientY);
-    const li = el?.closest?.('li.playlist-item');
-    const targetIndex = li ? parseInt(li.dataset.index) : draggingIndex;
-
-    if (draggingIndex !== null && targetIndex !== draggingIndex) {
-      const item = playlist.splice(draggingIndex, 1)[0];
-      playlist.splice(targetIndex, 0, item);
-
-      if (currentTrackIndex === draggingIndex) currentTrackIndex = targetIndex;
-      else {
-        if (draggingIndex < currentTrackIndex && targetIndex >= currentTrackIndex) currentTrackIndex--;
-        if (draggingIndex > currentTrackIndex && targetIndex <= currentTrackIndex) currentTrackIndex++;
-      }
-    }
-
-    touchDragging = false;
-    draggingIndex = null;
-    clearDragOver();
+  function toggleGroupByArtist() {
+    groupByArtist = !groupByArtist;
     render();
-    callbacks.onPlaylistChanged(playlist);
+    onPlaylistUpdated();
+    return groupByArtist;
   }
 
-  function clearDragOver() {
-    ul.querySelectorAll('.drag-over-top,.drag-over-bottom').forEach(x => {
-      x.classList.remove('drag-over-top','drag-over-bottom');
-    });
+  function setGroupByArtist(v) {
+    groupByArtist = !!v;
+    render();
   }
 
-  function highlight() {
-    ul.querySelectorAll('li').forEach(li => li.classList.remove('active'));
-    const curLi = ul.querySelector(`#track-${currentTrackIndex}`);
-    if (curLi) curLi.classList.add('active');
-  }
+  function isGroupByArtist() { return groupByArtist; }
+  function getSortMode() { return sortMode; }
 
-  // --- render ---
   function render() {
-    ul.innerHTML = '';
+    playlistUl.innerHTML = "";
 
-    if (!playlist.length) {
-      ul.innerHTML = '<li class="placeholder text-center pt-10">曲をドロップしてください</li>';
-      callbacks.onEmpty();
-      savePlaylistState(callbacks.getLastState());
+    if (playlist.length === 0) {
+      playlistUl.innerHTML = `<li class="placeholder text-center pt-10">曲をドロップしてください</li>`;
       return;
     }
 
-    playlist.forEach((track, index) => {
-      const li = document.createElement('li');
-      li.className = 'playlist-item flex items-center space-x-2 p-2 rounded-lg cursor-pointer transition-colors relative group';
-      li.dataset.index = index;
-      li.id = `track-${index}`;
-      li.draggable = true;
-
-      li.addEventListener('dragstart', onDragStart);
-      li.addEventListener('dragend', onDragEnd);
-      li.addEventListener('dragover', onDragOver);
-      li.addEventListener('drop', onDrop);
-
-      // drag handle
-      const handle = document.createElement('span');
-      handle.className = 'drag-handle text-lg';
-      handle.textContent = '≡';
-      handle.addEventListener('touchstart', onHandleTouchStart, { passive: true });
-      handle.addEventListener('touchmove', onHandleTouchMove, { passive: false });
-      handle.addEventListener('touchend', onHandleTouchEnd);
-      li.appendChild(handle);
-
-      const img = document.createElement('img');
-      img.src = track.artwork || 'https://placehold.co/50x50/312e81/ffffff?text=MP3';
-      img.className = 'w-10 h-10 object-cover rounded-md';
-      li.appendChild(img);
-
-      const info = document.createElement('div');
-      info.className = 'flex-grow min-w-0';
-
-      if (track.artist === 'ロード中...') {
-        info.innerHTML = `
-          <p class="text-sm font-medium truncate">${track.title}</p>
-          <p class="text-xs truncate w-24 h-4 rounded bg-gray-500/30 animate-pulse"></p>
-        `;
-      } else {
-        info.innerHTML = `
-          <p class="text-sm font-medium truncate">${track.title}</p>
-          <p class="text-xs truncate" style="color: var(--text-secondary);">
-            ${track.missing ? '※ファイル未ロード（再追加で復元）' : track.artist}
-          </p>
-        `;
-      }
-      li.appendChild(info);
-
-      const dur = document.createElement('span');
-      dur.className = 'text-xs font-mono px-2 playlist-duration';
-      dur.textContent = formatTime(track.duration);
-      if (track.duration === null) {
-        dur.className += ' w-8 h-4 rounded bg-gray-500/30 animate-pulse';
-      }
-      li.appendChild(dur);
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'control-btn p-1 rounded-full transition-colors opacity-0 group-hover:opacity-100';
-      delBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-        </svg>
-      `;
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        removeTrack(index);
-      });
-      li.appendChild(delBtn);
-
-      li.addEventListener('click', () => callbacks.onSelect(index));
-
-      ul.appendChild(li);
-    });
+    if (groupByArtist) {
+      renderGrouped();
+    } else {
+      renderFlat();
+    }
 
     highlight();
-    savePlaylistState(callbacks.getLastState());
+    setupDnD();
   }
 
-  // search
-  if (searchInput) {
-    searchInput.addEventListener('input', (e) => filterList(e.target.value));
+  function renderGrouped() {
+    const groups = new Map();
+    playlist.forEach((t, i) => {
+      const a = t.artist || "不明なアーティスト";
+      if (!groups.has(a)) groups.set(a, []);
+      groups.get(a).push({ track: t, index: i });
+    });
+
+    for (const [artist, items] of groups.entries()) {
+      const header = document.createElement("li");
+      header.className = "group-header";
+      header.innerHTML = `
+        <span>${artist}</span>
+        <span class="count">${items.length}曲</span>
+      `;
+      header.addEventListener("click", () => {
+        if (collapsedGroups.has(artist)) collapsedGroups.delete(artist);
+        else collapsedGroups.add(artist);
+        render();
+      });
+      playlistUl.appendChild(header);
+
+      if (collapsedGroups.has(artist)) continue;
+
+      items.forEach(({ track, index }) => {
+        playlistUl.appendChild(createTrackLI(track, index));
+      });
+    }
   }
+
+  function renderFlat() {
+    playlist.forEach((track, index) => {
+      playlistUl.appendChild(createTrackLI(track, index));
+    });
+  }
+
+  function createTrackLI(track, index) {
+    const li = document.createElement("li");
+    li.className = "playlist-item flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative group";
+    li.dataset.index = index;
+    li.id = `track-${index}`;
+    li.draggable = true;
+
+    const img = document.createElement("img");
+    img.src = track.artwork || "https://placehold.co/50x50/312e81/ffffff?text=MP3";
+    img.className = "w-10 h-10 object-cover rounded-md";
+    li.appendChild(img);
+
+    const info = document.createElement("div");
+    info.className = "flex-grow min-w-0";
+
+    if (track.artist === "ロード中...") {
+      info.innerHTML = `
+        <p class="text-sm font-medium truncate">${track.title}</p>
+        <p class="text-xs truncate w-24 h-4 rounded bg-gray-500/30 animate-pulse"></p>`;
+    } else {
+      info.innerHTML = `
+        <p class="text-sm font-medium truncate">${track.title}</p>
+        <p class="text-xs truncate" style="color: var(--text-secondary);">${track.artist}</p>`;
+    }
+    li.appendChild(info);
+
+    const dur = document.createElement("span");
+    dur.className = "text-xs font-mono px-2 playlist-duration";
+    dur.textContent = track.duration == null ? "…" : formatTime(track.duration);
+    if (track.duration == null) dur.className += " w-8 h-4 rounded bg-gray-500/30 animate-pulse";
+    li.appendChild(dur);
+
+    const del = document.createElement("button");
+    del.className = "control-btn p-1 rounded-full transition-colors opacity-0 group-hover:opacity-100";
+    del.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5"
+        fill="none" viewBox="0 0 24 24"
+        stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+      </svg>`;
+    del.addEventListener("click", e => {
+      e.stopPropagation();
+      removeTrack(index);
+    });
+    li.appendChild(del);
+
+    li.addEventListener("click", () => onSelectTrack(index, true));
+    return li;
+  }
+
+  function highlight() {
+    playlistUl.querySelectorAll(".playlist-item").forEach(li => li.classList.remove("active"));
+    const cur = playlistUl.querySelector(`#track-${currentIndex}`);
+    if (cur) cur.classList.add("active");
+  }
+
+  // 検索
+  function filter(q) {
+    const query = q.toLowerCase();
+    playlistUl.querySelectorAll(".playlist-item").forEach(li => {
+      const i = Number(li.dataset.index);
+      const t = playlist[i];
+      if (!t) return;
+      const ok = (t.title||"").toLowerCase().includes(query)
+             || (t.artist||"").toLowerCase().includes(query);
+      li.classList.toggle("hidden", !ok);
+    });
+  }
+
+  // Drag & Drop 並び替え（desktop + mobile簡易対応）
+  function setupDnD() {
+    let dragIndex = null;
+
+    playlistUl.querySelectorAll(".playlist-item").forEach(li => {
+      li.addEventListener("dragstart", e => {
+        dragIndex = Number(li.dataset.index);
+        li.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+      });
+
+      li.addEventListener("dragend", () => {
+        li.classList.remove("dragging");
+        dragIndex = null;
+        savePlaylist(playlist);
+      });
+
+      li.addEventListener("dragover", e => e.preventDefault());
+      li.addEventListener("drop", e => {
+        e.preventDefault();
+        const targetIndex = Number(li.dataset.index);
+        if (dragIndex == null || dragIndex === targetIndex) return;
+
+        const [moved] = playlist.splice(dragIndex, 1);
+        playlist.splice(targetIndex, 0, moved);
+
+        // originalOrderも更新（追加順維持したい場合は別）
+        playlist.forEach((t, i) => t.originalOrder = i);
+
+        if (currentIndex === dragIndex) currentIndex = targetIndex;
+        else if (dragIndex < currentIndex && targetIndex >= currentIndex) currentIndex--;
+        else if (dragIndex > currentIndex && targetIndex <= currentIndex) currentIndex++;
+
+        render();
+        onPlaylistUpdated();
+      });
+
+      // mobile long-press fallback（表示順のみ入れ替え）
+      let pressTimer = null;
+      li.addEventListener("touchstart", () => {
+        pressTimer = setTimeout(() => {
+          li.draggable = true;
+        }, 250);
+      }, { passive:true });
+      li.addEventListener("touchend", () => clearTimeout(pressTimer));
+    });
+  }
+
+  initFromStorage();
 
   return {
-    addFiles,
-    removeTrack,
-    clearAll,
+    handleFiles,
     render,
-    highlight,
+    filter,
+    clearAll,
+    removeTrack,
     setCurrentIndex,
-    setShuffle,
-    get playlist() { return playlist; },
-    get currentTrackIndex() { return currentTrackIndex; },
-    getNextIndex,
-    getPrevIndex,
+    getCurrentIndex,
+    getPlaylist,
     createShuffled,
-    restoreFromStorage,
-    savePlaylistState,
+    getShuffled,
+    applySort,
+    toggleGroupByArtist,
+    setGroupByArtist,
+    isGroupByArtist,
+    getSortMode
   };
 }
