@@ -1,13 +1,22 @@
-// js/main.js  v3.9.1 hotfix3 full
+// js/main.js
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
 import { PlayerCore } from "./modules/playerCore.js";
-import { PlaylistPersist } from "./modules/playlistPersist.js";
-import * as utils from "./modules/utils.js";
 
-// ★ AudioFxは export形式が環境で違うので * import にして吸収する
-import * as audioFxMod from "./modules/audioFx.js";
+// ★ここ重要：named import禁止
+import * as AudioFxMod from "./modules/audioFx.js";
+
+import { PlaylistPersist } from "./modules/playlistPersist.js";
+import { clamp, formatTime, isMp3File } from "./modules/utils.js";
+
+// AudioFx 解決（named / default 両対応）
+const AudioFxResolved =
+  AudioFxMod.AudioFx ||
+  AudioFxMod.default ||
+  AudioFxMod.AudioFX ||
+  null;
+
 
 const { clamp, formatTime, isMp3File } = utils;
 
