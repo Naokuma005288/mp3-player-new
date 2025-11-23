@@ -1,21 +1,19 @@
-// js/main.js  v3.9.1 hotfix6 full
+// js/main.js  v3.9.1 hotfix-root full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
 import { PlayerCore } from "./modules/playerCore.js";
-import AudioFx from "./modules/audioFx.js";                // ★default import決め打ち
+import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
-import { clamp as _clamp, formatTime, isMp3File } from "./modules/utils.js";
+import { formatTime, isMp3File } from "./modules/utils.js";
 
 // ===============================
-// UI取得（null安全）
+// UI
 // ===============================
 const ui = {
-  // audio
   audioA: document.getElementById("audio-a") || document.getElementById("audio-player"),
   audioB: document.getElementById("audio-b") || null,
 
-  // main
   fileInput: document.getElementById("file-input"),
   dropZone: document.getElementById("drop-zone"),
   albumArt: document.getElementById("album-art"),
@@ -30,18 +28,15 @@ const ui = {
   playerContainer: document.getElementById("player-container"),
   fileSelectUI: document.getElementById("file-select-ui"),
 
-  // minimal
   minimalPlayBtnOverlay: document.getElementById("minimal-play-btn-overlay"),
   minimalPlayIcon: document.getElementById("minimal-play-icon"),
   minimalPauseIcon: document.getElementById("minimal-pause-icon"),
 
-  // nav
   prevBtn: document.getElementById("prev-btn"),
   nextBtn: document.getElementById("next-btn"),
   seekForwardBtn: document.getElementById("seek-forward-btn"),
   seekBackwardBtn: document.getElementById("seek-backward-btn"),
 
-  // shuffle / repeat / rate
   shuffleBtn: document.getElementById("shuffle-btn"),
   repeatBtn: document.getElementById("repeat-btn"),
   repeatNoneIcon: document.getElementById("repeat-none-icon"),
@@ -49,13 +44,11 @@ const ui = {
   repeatOneIcon: document.getElementById("repeat-one-icon"),
   playbackRateBtn: document.getElementById("playback-rate-btn"),
 
-  // volume
   volumeControl: document.getElementById("volume-control"),
   volumeMuteToggle: document.getElementById("volume-mute-toggle"),
   volumeHighIcon: document.getElementById("volume-high-icon"),
   volumeMuteIcon: document.getElementById("volume-mute-icon"),
 
-  // playlist panel
   playlistToggleBtn: document.getElementById("playlist-toggle-btn"),
   playlistCloseBtn: document.getElementById("playlist-close-btn"),
   playlistPanel: document.getElementById("playlist-panel"),
@@ -63,36 +56,21 @@ const ui = {
   playlistSearch: document.getElementById("playlist-search"),
   clearPlaylistBtn: document.getElementById("clear-playlist-btn"),
 
-  // settings buttons
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
   themeSunIcon: document.getElementById("theme-sun-icon"),
   themeMoonIcon: document.getElementById("theme-moon-icon"),
+
   vizStyleBtn: document.getElementById("viz-style-btn"),
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
 
-  // optional advanced buttons
-  eqBtn: document.getElementById("eq-btn") || document.getElementById("eq-toggle-btn"),
-  normalizeBtn: document.getElementById("normalize-btn") || document.getElementById("normalize-toggle-btn"),
-  waveBtn: document.getElementById("wave-btn") || document.getElementById("wave-toggle-btn"),
-  transitionBtn: document.getElementById("transition-btn") || document.getElementById("transition-toggle-btn"),
-  sortBtn: document.getElementById("sort-btn"),
-  selectBtn: document.getElementById("select-btn"),
-  removeSelectedBtn: document.getElementById("remove-selected-btn"),
-
-  // import/export
-  importBtn: document.getElementById("import-btn"),
-  exportBtn: document.getElementById("export-btn"),
-
-  // visualizer
   visualizerCanvas: document.getElementById("visualizer-canvas"),
 
-  // toast
   toast: document.getElementById("toast"),
   toastMessage: document.getElementById("toast-message"),
 };
 
-// audioBが無ければ作成（保険）
+// audioBが無ければ作る（クロスフェード用）
 if (!ui.audioB) {
   ui.audioB = document.createElement("audio");
   ui.audioB.style.display = "none";
@@ -104,10 +82,7 @@ if (!ui.audioB) {
 // ===============================
 let toastTimer = null;
 function showToast(message, isError = false) {
-  if (!ui.toast || !ui.toastMessage) {
-    console.log("[toast]", message);
-    return;
-  }
+  if (!ui.toast || !ui.toastMessage) return;
   if (toastTimer) clearTimeout(toastTimer);
 
   ui.toastMessage.textContent = message;
@@ -122,35 +97,40 @@ function showToast(message, isError = false) {
 }
 
 // ===============================
-// Modules init
+// Modules
 // ===============================
 const settings = new Settings("mp3PlayerSettings_v3");
 const persist = new PlaylistPersist("mp3PlayerPlaylist_v3");
 const audioFx = new AudioFx(settings);
+
+// ★根本保険：どんなAudioFxが来てもPlaylistが落ちない
+if (typeof audioFx.analyzeAndGetGain !== "function") {
+  audioFx.analyzeAndGetGain = async () => 1;
+}
+if (typeof audioFx.extractWavePeaks !== "function") {
+  audioFx.extractWavePeaks = async () => null;
+}
+
 const playlist = new Playlist(settings, persist);
 const player = new PlayerCore(ui, playlist, settings, audioFx);
 
-// あなたの visualizer.js のシグネチャに合わせる
-const visualizer = ui.visualizerCanvas ? new Visualizer(ui.visualizerCanvas, settings, audioFx) : null;
+const visualizer = ui.visualizerCanvas
+  ? new Visualizer(ui.visualizerCanvas, settings, audioFx)
+  : null;
 visualizer?.start?.();
 
-// ゴースト復元（再生不能曲が含まれても落ちない）
 playlist.reloadFromPersist?.();
-
-// ===============================
-// 初期UI
-// ===============================
-updateThemeIcons();
-updateVizIcons();
 renderPlaylist();
 player.updateControls?.();
 updateFileUIState();
+updateThemeIcons();
+updateVizIcons();
 updateRepeatIcons();
 updateShuffleUi();
 updatePlaybackRateUi();
 
 // ===============================
-// Events from PlayerCore
+// PlayerCore events
 // ===============================
 player.on?.("playstate", (isPaused) => {
   updatePlayPauseIcon(isPaused);
@@ -169,45 +149,7 @@ player.on?.("time", ({ currentTime, duration }) => {
 });
 
 // ===============================
-// ★保険：PlayerCoreが何もしなくても必ず再生する
-// ===============================
-function forceLoadAndPlay(index) {
-  const track = playlist.tracks?.[index];
-  if (!track || !track.file) {
-    showToast("この曲は再生できません（ファイル無し）", true);
-    return false;
-  }
-
-  const a = player.getActiveAudio?.() ?? ui.audioA;
-  if (!a) {
-    showToast("audio要素が見つかりません", true);
-    return false;
-  }
-
-  if (!a.src || !a.src.startsWith("blob:") || a.__trackIndex !== index) {
-    try {
-      const url = URL.createObjectURL(track.file);
-      a.src = url;
-      a.__trackIndex = index;
-    } catch (e) {
-      console.error(e);
-      showToast("曲の読み込みに失敗しました", true);
-      return false;
-    }
-  }
-
-  const p = a.play();
-  if (p && p.catch) {
-    p.catch(err => {
-      console.warn("play blocked:", err);
-      showToast("再生がブロックされました。もう一度押してね🙏", true);
-    });
-  }
-  return true;
-}
-
-// ===============================
-// File input
+// File handlers
 // ===============================
 ui.fileInput?.addEventListener("change", async (e) => {
   const files = e.target.files;
@@ -216,7 +158,6 @@ ui.fileInput?.addEventListener("change", async (e) => {
   ui.fileInput.value = "";
 });
 
-// Drag & Drop
 ui.dropZone?.addEventListener("dragover", (e) => {
   e.preventDefault();
   ui.dropZone.classList.add("bg-white/10", "scale-105");
@@ -240,15 +181,34 @@ ui.dropZone?.addEventListener("drop", async (e) => {
   await handleFiles(mp3s);
 });
 
-// ===============================
-// Minimal mode
-// ===============================
-ui.dropZone?.addEventListener("dblclick", toggleMinimalMode);
+async function handleFiles(files) {
+  const mp3s = Array.from(files).filter(isMp3File);
+  if (mp3s.length === 0) return;
 
-// minimal click play/pause（保険あり）
-ui.dropZone?.addEventListener("click", () => {
-  if (!ui.playerContainer?.classList.contains("minimal")) return;
-  if ((playlist.tracks?.length ?? 0) === 0) return;
+  await playlist.addFiles(mp3s, audioFx);
+
+  player.updateControls?.();
+  updateFileUIState();
+  renderPlaylist();
+
+  if (playlist.currentTrackIndex === -1) {
+    const first = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
+    if (first !== -1) {
+      playlist.currentTrackIndex = first;
+      player.prepareTrack?.(first);
+      updateMainUI(first);
+      highlightCurrentTrack();
+    }
+  }
+
+  showToast(`${mp3s.length} 曲を追加しました`);
+}
+
+// ===============================
+// Controls
+// ===============================
+ui.playPauseBtn?.addEventListener("click", () => {
+  if (playlist.tracks.length === 0) return;
 
   audioFx.ensureContext?.();
   audioFx.resumeContext?.();
@@ -258,338 +218,122 @@ ui.dropZone?.addEventListener("click", () => {
     if (first !== -1) {
       playlist.currentTrackIndex = first;
       player.loadTrack?.(first, true);
-      forceLoadAndPlay(first);
-      updateMainUI(first);
-      highlightCurrentTrack();
     }
-    return;
-  }
-
-  const a = player.getActiveAudio?.() ?? ui.audioA;
-  if (a?.paused) {
-    player.togglePlayPause?.();
-    if (a.paused) forceLoadAndPlay(playlist.currentTrackIndex);
-  } else {
-    player.togglePlayPause?.();
-  }
-});
-
-// ===============================
-// Play / Pause（強制再生保険あり）
-// ===============================
-ui.playPauseBtn?.addEventListener("click", () => {
-  if ((playlist.tracks?.length ?? 0) === 0) return;
-
-  audioFx.ensureContext?.();
-  audioFx.resumeContext?.();
-
-  if (playlist.currentTrackIndex === -1) {
-    const first = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
-    if (first !== -1) {
-      playlist.currentTrackIndex = first;
-      forceLoadAndPlay(first);
-      player.updateControls?.();
-      updateMainUI(first);
-      highlightCurrentTrack();
-    }
-    return;
-  }
-
-  const a = player.getActiveAudio?.() ?? ui.audioA;
-
-  if (!a?.src) {
-    forceLoadAndPlay(playlist.currentTrackIndex);
     return;
   }
 
   player.togglePlayPause?.();
-
-  if (a.paused) a.play().catch(() => {});
 });
 
-// Prev / Next
 ui.prevBtn?.addEventListener("click", () => player.playPrev?.());
 ui.nextBtn?.addEventListener("click", () => player.playNext?.());
 
-// Seek ±10
 ui.seekForwardBtn?.addEventListener("click", () => player.seek?.(10));
 ui.seekBackwardBtn?.addEventListener("click", () => player.seek?.(-10));
 
-// Shuffle / Repeat
 ui.shuffleBtn?.addEventListener("click", () => {
   playlist.toggleShuffle?.();
   updateShuffleUi();
-  showToast(playlist.shuffle ? "シャッフルON" : "シャッフルOFF");
 });
+
 ui.repeatBtn?.addEventListener("click", () => {
   playlist.toggleRepeat?.();
   updateRepeatIcons();
-  showToast(`リピート: ${playlist.repeatMode}`);
 });
 
-// Playback rate
 ui.playbackRateBtn?.addEventListener("click", () => {
   const rate = player.changePlaybackRate?.() ?? 1;
   updatePlaybackRateUi();
   showToast(`再生速度 ${rate}x`);
 });
 
-// Progress bar preview / commit
 ui.progressBar?.addEventListener("input", (e) => {
-  const v = parseFloat(e.target.value || "0");
-  const newTime = player.previewSeek?.(v) ?? 0;
-  if (ui.currentTimeDisplay) ui.currentTimeDisplay.textContent = formatTime(newTime);
-});
-ui.progressBar?.addEventListener("change", (e) => {
-  const v = parseFloat(e.target.value || "0");
-  player.commitSeek?.(v);
+  const a = player.getActiveAudio?.() ?? ui.audioA;
+  if (!a?.duration) return;
+  const p = parseFloat(e.target.value || "0");
+  const t = a.duration * (p / 100);
+  ui.currentTimeDisplay.textContent = formatTime(t);
 });
 
-// Volume slider
+ui.progressBar?.addEventListener("change", (e) => {
+  const a = player.getActiveAudio?.() ?? ui.audioA;
+  if (!a?.duration) return;
+  const p = parseFloat(e.target.value || "0");
+  a.currentTime = a.duration * (p / 100);
+});
+
 ui.volumeControl?.addEventListener("input", (e) => {
   const v = parseFloat(e.target.value || "1");
   player.setVolume?.(v);
   updateVolumeIcon(v);
 });
 
-// Mute toggle
 ui.volumeMuteToggle?.addEventListener("click", () => {
   const v = player.toggleMute?.() ?? 0;
-  if (ui.volumeControl) ui.volumeControl.value = v;
+  ui.volumeControl.value = v;
   updateVolumeIcon(v);
 });
 
-// Playlist panel open/close
+// ===============================
+// Playlist panel / search / clear
+// ===============================
+function togglePlaylist() {
+  ui.playlistPanel?.classList.toggle("open");
+}
 ui.playlistToggleBtn?.addEventListener("click", togglePlaylist);
 ui.playlistCloseBtn?.addEventListener("click", togglePlaylist);
 
-// Playlist search
 ui.playlistSearch?.addEventListener("input", (e) => {
   playlist.setFilter?.(e.target.value);
   renderPlaylist();
 });
 
-// Clear playlist
 ui.clearPlaylistBtn?.addEventListener("click", () => {
   player.stop?.();
   playlist.clearAll?.();
   renderPlaylist();
   resetPlayerUI();
   player.updateControls?.();
-  togglePlaylist(false);
+  togglePlaylist();
   showToast("プレイリストをクリアしました");
 });
 
-// Theme toggle
+// ===============================
+// Theme / Visualizer
+// ===============================
 ui.themeToggleBtn?.addEventListener("click", () => {
-  const mode = settings.toggleTheme?.() ?? settings.get("theme");
+  document.documentElement.classList.toggle("light-mode");
+  settings.set?.("theme", document.documentElement.classList.contains("light-mode") ? "light" : "dark");
   updateThemeIcons();
-  showToast(mode === "light" ? "ライトモード" : "ダークモード");
 });
 
-// Visualizer style toggle
 ui.vizStyleBtn?.addEventListener("click", () => {
-  const style = settings.toggleVisualizerStyle?.() ?? settings.get("visualizerStyle");
+  const cur = settings.get?.("visualizerStyle") || "line";
+  const next = (cur === "line") ? "bars" : "line";
+  settings.set?.("visualizerStyle", next);
   updateVizIcons();
-  showToast(`ビジュアライザー: ${style}`);
-});
-
-// Optional advanced toggles
-ui.eqBtn?.addEventListener("click", () => {
-  const enabled = settings.toggleEq?.() ?? false;
-  ui.eqBtn.classList.toggle("btn-active", enabled);
-  audioFx.setEqEnabled?.(enabled);
-  showToast(enabled ? "EQ ON" : "EQ OFF");
-});
-
-ui.normalizeBtn?.addEventListener("click", () => {
-  const enabled = settings.toggleNormalize?.() ?? false;
-  ui.normalizeBtn.classList.toggle("btn-active", enabled);
-  audioFx.setNormalizeEnabled?.(enabled);
-  showToast(enabled ? "音量正規化 ON" : "音量正規化 OFF");
-});
-
-ui.waveBtn?.addEventListener("click", () => {
-  const enabled = settings.toggleWaveform?.() ?? false;
-  ui.waveBtn.classList.toggle("btn-active", enabled);
-  showToast(enabled ? "波形表示 ON" : "波形表示 OFF");
-  renderPlaylist();
-});
-
-ui.transitionBtn?.addEventListener("click", () => {
-  const mode = settings.cycleTransitionMode?.() ?? "none";
-  ui.transitionBtn.classList.toggle("btn-active", mode !== "none");
-  showToast(`曲間遷移: ${mode}`);
-});
-
-// Sort / Select / Remove selected
-ui.sortBtn?.addEventListener("click", () => {
-  playlist.cycleSortMode?.();
-  renderPlaylist();
-  showToast(`ソート: ${playlist.sortMode}`);
-});
-
-ui.selectBtn?.addEventListener("click", () => {
-  playlist.toggleSelectMode?.();
-  ui.selectBtn.classList.toggle("btn-active", playlist.selectMode);
-  renderPlaylist();
-  showToast(playlist.selectMode ? "選択モード ON" : "選択モード OFF");
-});
-
-ui.removeSelectedBtn?.addEventListener("click", () => {
-  const n = playlist.removeSelected?.() ?? 0;
-  if (n > 0) {
-    renderPlaylist();
-    showToast(`${n}曲削除しました`);
-    if ((playlist.tracks?.length ?? 0) === 0) resetPlayerUI();
-  } else {
-    showToast("選択されていません", true);
-  }
 });
 
 // ===============================
-// Import / Export （メタデータのみ）
+// Minimal mode
 // ===============================
-ui.exportBtn?.addEventListener("click", exportPlaylistJSON);
-ui.importBtn?.addEventListener("click", importPlaylistJSON);
-
-function exportPlaylistJSON() {
-  if ((playlist.tracks?.length ?? 0) === 0) {
-    showToast("プレイリストが空です", true);
-    return;
-  }
-
-  const data = playlist.tracks.map(t => ({
-    title: t.title || "",
-    artist: t.artist || "",
-    duration: t.duration || 0,
-    gain: t.gain || 1,
-    isGhost: !t.file,
-    fileName: t.file?.name || null
-  }));
-
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "mp3-player-playlist.json";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-
-  showToast("プレイリストを書き出しました");
-}
-
-function importPlaylistJSON() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".json,application/json";
-
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const arr = JSON.parse(text);
-      if (!Array.isArray(arr)) throw new Error("Invalid JSON");
-
-      player.stop?.();
-      playlist.tracks = arr.map(p => ({
-        file: null,
-        title: p.title || "Imported Track",
-        artist: p.artist || "Unknown",
-        duration: p.duration || 0,
-        artwork: null,
-        wavePeaks: null,
-        gain: (p.gain && p.gain > 0.02) ? p.gain : 1,
-        isGhost: true
-      }));
-
-      persist.save?.(playlist.tracks);
-      playlist.currentTrackIndex = -1;
-
-      renderPlaylist();
-      resetPlayerUI();
-      player.updateControls?.();
-
-      showToast("プレイリストを読み込みました（曲データは未ロード）");
-    } catch (e) {
-      console.error(e);
-      showToast("読み込みに失敗しました", true);
-    }
-  };
-
-  input.click();
-}
-
-// Keyboard shortcuts
-document.addEventListener("keydown", (e) => {
-  if (e.target === ui.playlistSearch) return;
-  if ((playlist.tracks?.length ?? 0) === 0) return;
-
-  if (e.code === "Space" && e.target.tagName !== "INPUT") {
-    e.preventDefault();
-    ui.playPauseBtn?.click();
-  }
-  if (e.code === "ArrowRight") {
-    e.preventDefault();
-    if (e.shiftKey) player.playNext?.();
-    else player.seek?.(10);
-  }
-  if (e.code === "ArrowLeft") {
-    e.preventDefault();
-    if (e.shiftKey) player.playPrev?.();
-    else player.seek?.(-10);
-  }
-});
-
-// ===============================
-// Core functions
-// ===============================
-async function handleFiles(files) {
-  const list = Array.from(files);
-  const mp3s = list.filter(isMp3File);
-  if (mp3s.length === 0) {
-    showToast("MP3ファイルのみ対応しています", true);
-    return;
-  }
-
-  await playlist.addFiles?.(mp3s, audioFx);
-  player.updateControls?.();
-  updateFileUIState();
-
-  const firstPlayable = playlist.getFirstPlayableIndex?.(0, 1) ?? 0;
-  if (playlist.currentTrackIndex === -1 && firstPlayable !== -1) {
-    playlist.currentTrackIndex = firstPlayable;
-    player.prepareTrack?.(firstPlayable);
-    updateMainUI(firstPlayable);
-  }
-
-  renderPlaylist();
-  showToast(`${mp3s.length} 曲を追加しました`);
-}
-
-function toggleMinimalMode() {
-  if ((playlist.tracks?.length ?? 0) === 0 || !ui.playerContainer) return;
-  ui.playerContainer.classList.toggle("minimal");
+ui.dropZone?.addEventListener("dblclick", () => {
+  if (playlist.tracks.length === 0) return;
+  ui.playerContainer?.classList.toggle("minimal");
   updateMinimalOverlay((player.getActiveAudio?.() ?? ui.audioA)?.paused ?? true);
-}
+});
 
-function togglePlaylist(force) {
-  if (!ui.playlistPanel) return;
-  if (typeof force === "boolean") {
-    ui.playlistPanel.classList.toggle("open", force);
-  } else {
-    ui.playlistPanel.classList.toggle("open");
-  }
-}
+ui.dropZone?.addEventListener("click", () => {
+  if (!ui.playerContainer?.classList.contains("minimal")) return;
+  if (playlist.tracks.length === 0) return;
+  ui.playPauseBtn?.click();
+});
 
+// ===============================
+// UI helpers
+// ===============================
 function updateFileUIState() {
-  if (!ui.fileSelectUI) return;
-  ui.fileSelectUI.classList.toggle("file-select-hidden", (playlist.tracks?.length ?? 0) > 0);
+  ui.fileSelectUI?.classList.toggle("file-select-hidden", playlist.tracks.length > 0);
 }
 
 function updatePlayPauseIcon(isPaused) {
@@ -612,21 +356,19 @@ function updateMinimalOverlay(isPaused) {
 }
 
 function updateMainUI(index) {
-  if (!ui.songTitle || !ui.songArtist) return;
-
-  if (index < 0 || !playlist.tracks?.[index]) {
+  if (index < 0 || !playlist.tracks[index]) {
     ui.songTitle.textContent = "再生する曲はありません";
     ui.songArtist.textContent = "ファイルをロードしてください";
     resetAlbumArt();
     return;
   }
 
-  const track = playlist.tracks[index];
-  ui.songTitle.textContent = track.title || "Unknown Title";
-  ui.songArtist.textContent = track.artist || "Unknown Artist";
+  const t = playlist.tracks[index];
+  ui.songTitle.textContent = t.title || "Unknown Title";
+  ui.songArtist.textContent = t.artist || "Unknown Artist";
 
-  if (track.artwork && ui.albumArt) {
-    ui.albumArt.src = track.artwork;
+  if (t.artwork) {
+    ui.albumArt.src = t.artwork;
     ui.albumArt.classList.remove("opacity-20");
   } else {
     resetAlbumArt();
@@ -634,45 +376,38 @@ function updateMainUI(index) {
 }
 
 function resetAlbumArt() {
-  if (!ui.albumArt) return;
   ui.albumArt.src = "https://placehold.co/512x512/312e81/ffffff?text=MP3";
   ui.albumArt.classList.add("opacity-20");
 }
 
 function resetPlayerUI() {
   updateMainUI(-1);
-  if (ui.currentTimeDisplay) ui.currentTimeDisplay.textContent = "0:00";
-  if (ui.durationDisplay) ui.durationDisplay.textContent = "0:00";
-  if (ui.progressBar) ui.progressBar.value = 0;
+  ui.currentTimeDisplay.textContent = "0:00";
+  ui.durationDisplay.textContent = "0:00";
+  ui.progressBar.value = 0;
   updatePlayPauseIcon(true);
 }
 
 function updateProgress(currentTime, duration) {
-  if (!ui.progressBar) return;
-
   const pct = duration ? (currentTime / duration) * 100 : 0;
   ui.progressBar.value = pct;
-
-  if (ui.currentTimeDisplay) ui.currentTimeDisplay.textContent = formatTime(currentTime);
-  if (ui.durationDisplay && duration) ui.durationDisplay.textContent = formatTime(duration);
+  ui.currentTimeDisplay.textContent = formatTime(currentTime);
+  if (duration) ui.durationDisplay.textContent = formatTime(duration);
 }
 
 function setDuration() {
   const a = player.getActiveAudio?.() ?? ui.audioA;
-  if (ui.durationDisplay && a?.duration) {
-    ui.durationDisplay.textContent = formatTime(a.duration);
-  }
+  if (a?.duration) ui.durationDisplay.textContent = formatTime(a.duration);
 }
 
 function highlightCurrentTrack() {
-  if (!ui.playlistUl) return;
-  ui.playlistUl.querySelectorAll("li.playlist-item").forEach(li => li.classList.remove("active"));
-  const cur = ui.playlistUl.querySelector(`li.playlist-item[data-index="${playlist.currentTrackIndex}"]`);
+  ui.playlistUl?.querySelectorAll("li.playlist-item").forEach(li => li.classList.remove("active"));
+  const cur = ui.playlistUl?.querySelector(`li.playlist-item[data-index="${playlist.currentTrackIndex}"]`);
   cur?.classList.add("active");
 }
 
 function updateRepeatIcons() {
-  const mode = playlist.repeatMode;
+  const mode = playlist.repeatMode || "none";
   ui.repeatNoneIcon?.classList.add("hidden");
   ui.repeatAllIcon?.classList.add("hidden");
   ui.repeatOneIcon?.classList.add("hidden");
@@ -683,16 +418,16 @@ function updateRepeatIcons() {
 }
 
 function updateShuffleUi() {
-  ui.shuffleBtn?.classList.toggle("btn-active", playlist.shuffle);
+  ui.shuffleBtn?.classList.toggle("btn-active", !!playlist.shuffle);
 }
 
 function updatePlaybackRateUi() {
   const rate = player.playbackRates?.[player.currentRateIndex] ?? 1;
-  if (ui.playbackRateBtn) ui.playbackRateBtn.textContent = `${rate}x`;
+  ui.playbackRateBtn.textContent = `${rate}x`;
 }
 
-function updateVolumeIcon(volume) {
-  if (volume === 0) {
+function updateVolumeIcon(vol) {
+  if (vol === 0) {
     ui.volumeHighIcon?.classList.add("hidden");
     ui.volumeMuteIcon?.classList.remove("hidden");
   } else {
@@ -702,64 +437,59 @@ function updateVolumeIcon(volume) {
 }
 
 function updateThemeIcons() {
-  const isLight = settings.get("theme") === "light";
+  const isLight = document.documentElement.classList.contains("light-mode");
   ui.themeSunIcon?.classList.toggle("hidden", !isLight);
   ui.themeMoonIcon?.classList.toggle("hidden", isLight);
 }
 
 function updateVizIcons() {
-  const style = settings.get("visualizerStyle") || "line";
+  const style = settings.get?.("visualizerStyle") || "line";
   ui.vizLineIcon?.classList.toggle("hidden", style !== "line");
   ui.vizBarsIcon?.classList.toggle("hidden", style !== "bars");
 }
 
+// ===============================
+// Playlist render
+// ===============================
 function renderPlaylist() {
   if (!ui.playlistUl) return;
 
   ui.playlistUl.innerHTML = "";
-  if ((playlist.tracks?.length ?? 0) === 0) {
+  if (playlist.tracks.length === 0) {
     ui.playlistUl.innerHTML = `<li class="placeholder text-center pt-10">曲をドロップしてください</li>`;
     return;
   }
 
-  const visibleIndices = playlist.getVisibleIndices?.(playlist.currentFilter) ??
-    playlist.tracks.map((_, i) => i);
+  const indices = playlist.getVisibleIndices?.() ?? playlist.tracks.map((_, i) => i);
 
-  visibleIndices.forEach((index) => {
-    const track = playlist.tracks[index];
+  indices.forEach((index) => {
+    const t = playlist.tracks[index];
+
     const li = document.createElement("li");
-    li.className =
-      "playlist-item group flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative";
+    li.className = "playlist-item group flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative";
     li.dataset.index = index;
-
-    if (!track.file) li.style.opacity = "0.6";
-
-    if (playlist.selectMode) {
-      li.classList.add("ring-1", "ring-white/20");
-      if (playlist.selected?.has(index)) li.classList.add("btn-active");
-    }
+    li.id = `track-${index}`;
 
     const img = document.createElement("img");
-    img.src = track.artwork || "https://placehold.co/50x50/312e81/ffffff?text=MP3";
+    img.src = t.artwork || "https://placehold.co/50x50/312e81/ffffff?text=MP3";
     img.className = "w-10 h-10 object-cover rounded-md";
     li.appendChild(img);
 
     const infoDiv = document.createElement("div");
     infoDiv.className = "flex-grow min-w-0";
     infoDiv.innerHTML = `
-      <p class="text-sm font-medium truncate">${track.title}</p>
-      <p class="text-xs truncate playlist-artist" style="color: var(--text-secondary);">${track.artist}</p>
+      <p class="text-sm font-medium truncate">${t.title}</p>
+      <p class="text-xs truncate" style="color: var(--text-secondary);">${t.artist}</p>
     `;
     li.appendChild(infoDiv);
 
     const dur = document.createElement("span");
     dur.className = "text-xs font-mono px-2 playlist-duration";
-    dur.textContent = formatTime(track.duration);
+    dur.textContent = formatTime(t.duration);
     li.appendChild(dur);
 
     const del = document.createElement("button");
-    del.className =
-      "control-btn p-1 rounded-full transition-colors opacity-0 group-hover:opacity-100";
+    del.className = "control-btn p-1 rounded-full transition-colors opacity-0 group-hover:opacity-100";
     del.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
         viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -771,27 +501,18 @@ function renderPlaylist() {
     `;
     del.addEventListener("click", (e) => {
       e.stopPropagation();
-      playlist.removeTrack?.(index);
+      playlist.removeTrack(index);
       renderPlaylist();
       player.updateControls?.();
-      if ((playlist.tracks?.length ?? 0) === 0) resetPlayerUI();
+      if (playlist.tracks.length === 0) resetPlayerUI();
     });
     li.appendChild(del);
 
     li.addEventListener("click", () => {
-      if (playlist.selectMode) {
-        playlist.toggleSelect?.(index);
-        renderPlaylist();
-        return;
-      }
-
       playlist.currentTrackIndex = index;
+      player.loadTrack?.(index, true);
       updateMainUI(index);
       highlightCurrentTrack();
-
-      player.loadTrack?.(index, true);
-      forceLoadAndPlay(index);
-      player.updateControls?.();
     });
 
     ui.playlistUl.appendChild(li);
@@ -799,3 +520,26 @@ function renderPlaylist() {
 
   highlightCurrentTrack();
 }
+
+// ===============================
+// Keyboard shortcuts
+// ===============================
+document.addEventListener("keydown", (e) => {
+  if (e.target === ui.playlistSearch) return;
+  if (playlist.tracks.length === 0) return;
+
+  if (e.code === "Space" && e.target.tagName !== "INPUT") {
+    e.preventDefault();
+    ui.playPauseBtn?.click();
+  }
+  if (e.code === "ArrowRight") {
+    e.preventDefault();
+    if (e.shiftKey) player.playNext?.();
+    else player.seek?.(10);
+  }
+  if (e.code === "ArrowLeft") {
+    e.preventDefault();
+    if (e.shiftKey) player.playPrev?.();
+    else player.seek?.(-10);
+  }
+});
