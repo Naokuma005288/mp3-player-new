@@ -1,11 +1,15 @@
-// js/main.js  v3.9.1 hotfix2 full
+// js/main.js  v3.9.1 hotfix3 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
 import { PlayerCore } from "./modules/playerCore.js";
-import { AudioFx } from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
-import { clamp, formatTime, isMp3File } from "./modules/utils.js";
+import * as utils from "./modules/utils.js";
+
+// ★ AudioFxは export形式が環境で違うので * import にして吸収する
+import * as audioFxMod from "./modules/audioFx.js";
+
+const { clamp, formatTime, isMp3File } = utils;
 
 // ===============================
 // UI取得（null安全）
@@ -126,13 +130,32 @@ function showToast(message, isError = false) {
 // ===============================
 const settings = new Settings("mp3PlayerSettings_v3");
 const persist = new PlaylistPersist("mp3PlayerPlaylist_v3");
-const audioFx = new AudioFx(settings);
+
+// ★ AudioFxの実体解決（export形式の違い吸収）
+const AudioFxClass =
+  audioFxMod.AudioFx ||
+  audioFxMod.default ||
+  audioFxMod.audioFx ||
+  null;
+
+const audioFx =
+  AudioFxClass
+    ? new AudioFxClass(settings)
+    : (audioFxMod.createAudioFx ? audioFxMod.createAudioFx(settings) : null);
+
+if (!audioFx) {
+  console.warn("[AudioFx] module found but no usable export. Fallback to plain audio.");
+}
+
 const playlist = new Playlist(settings, persist);
 const player = new PlayerCore(ui, playlist, settings, audioFx);
-const visualizer = ui.visualizerCanvas ? new Visualizer(ui.visualizerCanvas, player, settings) : null;
+const visualizer =
+  ui.visualizerCanvas && Visualizer
+    ? new Visualizer(ui.visualizerCanvas, player, settings)
+    : null;
 
-// ゴースト復元（再生不能曲が含まれても落ちない）
-playlist.reloadFromPersist();
+// ゴースト復元（落ちない）
+playlist.reloadFromPersist?.();
 
 // ===============================
 // 初期UI
@@ -204,13 +227,13 @@ ui.dropZone?.addEventListener("drop", async (e) => {
 // ===============================
 ui.dropZone?.addEventListener("dblclick", toggleMinimalMode);
 
-// minimal click play/pause (hotfix)
+// minimal click play/pause
 ui.dropZone?.addEventListener("click", () => {
   if (!ui.playerContainer?.classList.contains("minimal")) return;
   if (playlist.tracks.length === 0) return;
 
-  audioFx.ensureContext?.();
-  audioFx.resumeContext?.();
+  audioFx?.ensureContext?.();
+  audioFx?.resumeContext?.();
 
   if (playlist.currentTrackIndex === -1) {
     const first = playlist.getFirstPlayableIndex(0, 1);
@@ -221,13 +244,13 @@ ui.dropZone?.addEventListener("click", () => {
 });
 
 // ===============================
-// Play / Pause (hotfix)
+// Play / Pause
 // ===============================
 ui.playPauseBtn?.addEventListener("click", () => {
   if (playlist.tracks.length === 0) return;
 
-  audioFx.ensureContext?.();
-  audioFx.resumeContext?.();
+  audioFx?.ensureContext?.();
+  audioFx?.resumeContext?.();
 
   if (playlist.currentTrackIndex === -1) {
     const first = playlist.getFirstPlayableIndex(0, 1);
@@ -329,14 +352,14 @@ ui.vizStyleBtn?.addEventListener("click", () => {
 ui.eqBtn?.addEventListener("click", () => {
   const enabled = settings.toggleEq?.() ?? false;
   ui.eqBtn.classList.toggle("btn-active", enabled);
-  audioFx.setEqEnabled?.(enabled);
+  audioFx?.setEqEnabled?.(enabled);
   showToast(enabled ? "EQ ON" : "EQ OFF");
 });
 
 ui.normalizeBtn?.addEventListener("click", () => {
   const enabled = settings.toggleNormalize?.() ?? false;
   ui.normalizeBtn.classList.toggle("btn-active", enabled);
-  audioFx.setNormalizeEnabled?.(enabled);
+  audioFx?.setNormalizeEnabled?.(enabled);
   showToast(enabled ? "音量正規化 ON" : "音量正規化 OFF");
 });
 
@@ -425,7 +448,6 @@ function importPlaylistJSON() {
     try {
       const text = await file.text();
       const arr = JSON.parse(text);
-
       if (!Array.isArray(arr)) throw new Error("Invalid JSON");
 
       player.stop();
@@ -486,6 +508,7 @@ document.addEventListener("keydown", (e) => {
 async function handleFiles(files) {
   const list = Array.from(files);
   const mp3s = list.filter(isMp3File);
+
   if (mp3s.length === 0) {
     showToast("MP3ファイルのみ対応しています", true);
     return;
@@ -547,14 +570,12 @@ function updateMinimalOverlay(isPaused) {
 
 function updateMainUI(index) {
   if (!ui.songTitle || !ui.songArtist) return;
-
   if (index < 0 || !playlist.tracks[index]) {
     ui.songTitle.textContent = "再生する曲はありません";
     ui.songArtist.textContent = "ファイルをロードしてください";
     resetAlbumArt();
     return;
   }
-
   const track = playlist.tracks[index];
   ui.songTitle.textContent = track.title || "Unknown Title";
   ui.songArtist.textContent = track.artist || "Unknown Artist";
@@ -583,7 +604,6 @@ function resetPlayerUI() {
 
 function updateProgress(currentTime, duration) {
   if (!ui.progressBar) return;
-
   const pct = duration ? (currentTime / duration) * 100 : 0;
   ui.progressBar.value = pct;
 
@@ -610,7 +630,6 @@ function updateRepeatIcons() {
   ui.repeatNoneIcon?.classList.add("hidden");
   ui.repeatAllIcon?.classList.add("hidden");
   ui.repeatOneIcon?.classList.add("hidden");
-
   if (mode === "none") ui.repeatNoneIcon?.classList.remove("hidden");
   if (mode === "all") ui.repeatAllIcon?.classList.remove("hidden");
   if (mode === "one") ui.repeatOneIcon?.classList.remove("hidden");
@@ -665,13 +684,7 @@ function renderPlaylist() {
       "playlist-item group flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative";
     li.dataset.index = index;
 
-    // ghostは薄く
     if (!track.file) li.style.opacity = "0.6";
-
-    if (playlist.selectMode) {
-      li.classList.add("ring-1", "ring-white/20");
-      if (playlist.selected.has(index)) li.classList.add("btn-active");
-    }
 
     // artwork
     const img = document.createElement("img");
@@ -682,26 +695,16 @@ function renderPlaylist() {
     // title/artist
     const infoDiv = document.createElement("div");
     infoDiv.className = "flex-grow min-w-0";
-    if (track.artist === "ロード中...") {
-      infoDiv.innerHTML = `
-        <p class="text-sm font-medium truncate">${track.title}</p>
-        <p class="text-xs truncate w-24 h-4 rounded bg-gray-500/30 animate-pulse"></p>
-      `;
-    } else {
-      infoDiv.innerHTML = `
-        <p class="text-sm font-medium truncate">${track.title}</p>
-        <p class="text-xs truncate playlist-artist" style="color: var(--text-secondary);">${track.artist}</p>
-      `;
-    }
+    infoDiv.innerHTML = `
+      <p class="text-sm font-medium truncate">${track.title}</p>
+      <p class="text-xs truncate playlist-artist" style="color: var(--text-secondary);">${track.artist}</p>
+    `;
     li.appendChild(infoDiv);
 
     // duration
     const dur = document.createElement("span");
     dur.className = "text-xs font-mono px-2 playlist-duration";
     dur.textContent = formatTime(track.duration);
-    if (!track.duration) {
-      dur.className += " w-8 h-4 rounded bg-gray-500/30 animate-pulse";
-    }
     li.appendChild(dur);
 
     // delete btn
@@ -709,9 +712,12 @@ function renderPlaylist() {
     del.className =
       "control-btn p-1 rounded-full transition-colors opacity-0 group-hover:opacity-100";
     del.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+        viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round"
-          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2
+          2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1
+          1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
       </svg>
     `;
     del.addEventListener("click", (e) => {
@@ -723,13 +729,7 @@ function renderPlaylist() {
     });
     li.appendChild(del);
 
-    // click item
     li.addEventListener("click", () => {
-      if (playlist.selectMode) {
-        playlist.toggleSelect(index);
-        renderPlaylist();
-        return;
-      }
       player.loadTrack(index, true);
     });
 
