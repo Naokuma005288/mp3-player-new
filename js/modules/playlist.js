@@ -1,4 +1,4 @@
-import { readFileAsArrayBuffer, extractPictureAsDataURL } from "./utils.js";
+import { extractPictureAsDataURL } from "./utils.js";
 
 export class Playlist {
   constructor(settings, persist) {
@@ -21,15 +21,30 @@ export class Playlist {
   reloadFromPersist() {
     const ghosts = this.persist.load();
     this.tracks = ghosts.map(g => ({
-      file: null,
+      file: null, // ゴースト（実体なし）
       title: g.title || "Ghost Track",
       artist: g.artist || "Unknown",
       duration: g.duration || 0,
       artwork: null,
       wavePeaks: null,
       gain: 1,
+      isGhost: true
     }));
     this.currentTrackIndex = -1;
+  }
+
+  /** v3.9.1 hotfix: fileがある再生可能曲を探す */
+  getFirstPlayableIndex(start = 0, dir = 1) {
+    const len = this.tracks.length;
+    if (len === 0) return -1;
+
+    let i = start;
+    for (let step = 0; step < len; step++) {
+      const t = this.tracks[i];
+      if (t && t.file) return i;
+      i = (i + dir + len) % len;
+    }
+    return -1;
   }
 
   async addFiles(files, audioFx) {
@@ -42,6 +57,7 @@ export class Playlist {
         artwork: null,
         wavePeaks: null,
         gain: 1,
+        isGhost: false
       };
       this.tracks.push(track);
       const index = this.tracks.length - 1;
@@ -124,7 +140,6 @@ export class Playlist {
   }
 
   _applySortAndPersist() {
-    // add モードでは並び変えない
     if (this.sortMode === "title") {
       this.tracks.sort((a,b)=> (a.title||"").localeCompare(b.title||""));
     }

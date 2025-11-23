@@ -1,31 +1,27 @@
 <!DOCTYPE html>
-<html lang="ja" class="">
+<html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>オシャレなMP3プレイヤー v3.9.1</title>
 
-  <!-- favicon 404 対策（空データURL） -->
-  <link rel="icon" href="data:image/x-icon;base64,AA" />
-
-  <!-- Tailwind CSS CDN（開発中はOK / 警告は無視で大丈夫） -->
+  <!-- Tailwind（開発用） -->
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- jsmediatags -->
   <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 
+  <!-- CSS -->
   <link rel="stylesheet" href="./css/style.css" />
 </head>
 
 <body class="min-h-screen flex items-center justify-center p-4 antialiased">
 
   <!-- メインプレイヤー -->
-  <div id="player-container" class="glass-container w-full max-w-sm rounded-2xl p-6 space-y-6 transition-all duration-500">
+  <div id="player-container" class="glass-container w-full max-w-sm rounded-2xl p-6 space-y-6 transition-all duration-500 relative">
 
     <!-- プレイリストボタン -->
     <button id="playlist-toggle-btn"
@@ -34,16 +30,15 @@
       title="プレイリスト">
       <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
         viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round"
-          d="M4 6h16M4 12h16M4 18h7" />
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h7" />
       </svg>
     </button>
 
-    <!-- audio（v3.9.x: クロスフェード用に2個） -->
-    <audio id="audio-a" crossorigin="anonymous" style="display:none;"></audio>
-    <audio id="audio-b" crossorigin="anonymous" style="display:none;"></audio>
+    <!-- Audio（クロスフェード用に2つ） -->
+    <audio id="audio-a" style="display:none;"></audio>
+    <audio id="audio-b" style="display:none;"></audio>
 
-    <!-- アートワーク / drop zone -->
+    <!-- アートワーク & ビジュアライザー -->
     <div id="drop-zone"
       class="relative w-full aspect-square rounded-xl overflow-hidden bg-black/10 flex items-center justify-center shadow-2xl transition-all duration-500 ease-in-out cursor-pointer"
       oncontextmenu="return false;">
@@ -55,13 +50,11 @@
         alt="Album Art">
 
       <canvas id="visualizer-canvas"></canvas>
-      <canvas id="waveform-canvas"></canvas>
 
       <!-- ファイル選択UI -->
-      <div id="file-select-ui"
-        class="z-20 absolute transition-opacity duration-500 flex flex-col items-center justify-center p-4">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16 mx-auto text-white/50"
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+      <div id="file-select-ui" class="z-20 absolute transition-opacity duration-500 flex flex-col items-center justify-center p-4">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-16 h-16 mx-auto text-white/50" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h4l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
         </svg>
@@ -69,35 +62,33 @@
           style="color: rgba(255, 255, 255, 0.8);">
           MP3ファイルをドラッグ＆ドロップ
         </p>
-
         <label for="file-input"
           class="mt-2 inline-block bg-white/30 hover:bg-white/40 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-all transform hover:scale-105">
           ファイルを選択
         </label>
-
-        <!-- iOS対策で accept は広めに -->
-        <input type="file" id="file-input"
-          accept="audio/*,.mp3,.mpeg,audio/mpeg"
-          class="hidden"
-          multiple>
+        <input type="file" id="file-input" accept=".mp3,audio/mpeg" class="hidden" multiple>
       </div>
 
-      <!-- ミニマルクリック用オーバーレイ -->
+      <!-- ミニマルモード用オーバーレイ -->
       <div id="minimal-play-btn-overlay"
         class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-500 z-20 pointer-events-none">
         <svg id="minimal-play-icon" xmlns="http://www.w3.org/2000/svg"
           class="h-12 w-12 text-white/90 hidden" fill="currentColor" viewBox="0 0 20 20">
           <path fill-rule="evenodd"
-            d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-            clip-rule="evenodd" />
+            d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555
+               7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1
+               1 0 000-1.664l-3-2z" clip-rule="evenodd" />
         </svg>
         <svg id="minimal-pause-icon" xmlns="http://www.w3.org/2000/svg"
           class="h-12 w-12 text-white/90 hidden" fill="currentColor" viewBox="0 0 20 20">
           <path fill-rule="evenodd"
-            d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1V8a1 1 0 00-1-1H8zm5 0a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1V8a1 1 0 00-1-1h-1z"
-            clip-rule="evenodd" />
+            d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0
+               00-1 1v4a1 1 0 001 1h1a1 1 0 001-1V8a1 1 0
+               00-1-1H8zm5 0a1 1 0 00-1 1v4a1 1 0 001 1h1a1
+               1 0 001-1V8a1 1 0 00-1-1h-1z" clip-rule="evenodd" />
         </svg>
       </div>
+
     </div>
 
     <!-- 曲情報 -->
@@ -106,7 +97,7 @@
       <p id="song-artist" class="text-sm mt-1 truncate">ファイルをロードしてください</p>
     </div>
 
-    <!-- プログレス -->
+    <!-- プログレスバー -->
     <div class="space-y-2 hide-on-minimal">
       <input type="range" id="progress-bar" min="0" max="100" value="0"
         class="w-full h-2 bg-transparent appearance-none cursor-pointer" disabled>
@@ -116,11 +107,12 @@
       </div>
     </div>
 
-    <!-- コントロール群 -->
+    <!-- コントロール -->
     <div class="space-y-4 hide-on-minimal">
 
       <!-- メインコントロール -->
       <div class="flex items-center justify-around">
+
         <button id="seek-backward-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="-10s">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -129,34 +121,49 @@
           </svg>
         </button>
 
-        <button id="prev-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="前へ">
+        <button id="prev-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="前の曲">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="currentColor"
             viewBox="0 0 20 20">
-            <path d="M8.445 14.832A1 1 0 0010 14.226V5.774a1 1 0 00-1.555-.832L4 8.667V5a1 1 0 00-2 0v10a1 1 0 002 0v-3.667l4.445 3.5zM18 5v10a1 1 0 01-2 0V5a1 1 0 012 0z"/>
+            <path
+              d="M8.445 14.832A1 1 0 0010 14.226V5.774a1 1
+                 0 00-1.555-.832L4 8.667V5a1 1 0 00-2 0v10a1
+                 1 0 002 0v-3.667l4.445 3.5zM18 5v10a1
+                 1 0 01-2 0V5a1 1 0 012 0z" />
           </svg>
         </button>
 
         <button id="play-pause-btn"
           class="w-16 h-16 rounded-full flex items-center justify-center shadow-lg transform hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled>
-          <svg id="play-icon" xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 ml-1"
-            fill="currentColor" viewBox="0 0 20 20">
+          disabled
+          title="再生/一時停止">
+          <svg id="play-icon" xmlns="http://www.w3.org/2000/svg"
+            class="h-8 w-8 ml-1" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd"
-              d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-              clip-rule="evenodd"/>
+              d="M10 18a8 8 0 100-16 8 8
+                 0 000 16zM9.555 7.168A1
+                 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
+              clip-rule="evenodd" />
           </svg>
           <svg id="pause-icon" xmlns="http://www.w3.org/2000/svg"
             class="h-8 w-8 hidden" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd"
-              d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1V8a1 1 0 00-1-1H8zm5 0a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1V8a1 1 0 00-1-1h-1z"
-              clip-rule="evenodd"/>
+              d="M10 18a8 8 0 100-16 8 8
+                 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h1a1
+                 1 0 001-1V8a1 1 0 00-1-1H8zm5 0a1 1 0 00-1 1v4a1 1
+                 0 001 1h1a1 1 0 001-1V8a1 1 0 00-1-1h-1z"
+              clip-rule="evenodd" />
           </svg>
         </button>
 
-        <button id="next-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="次へ">
+        <button id="next-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="次の曲">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="currentColor"
             viewBox="0 0 20 20">
-            <path d="M11.555 14.832A1 1 0 0110 14.226V5.774a1 1 0 011.555-.832l4.445 3.667V5a1 1 0 012 0v10a1 1 0 01-2 0v-3.667l-4.445 3.5zM2 5v10a1 1 0 002 0V5a1 1 0 00-2 0z"/>
+            <path
+              d="M11.555 14.832A1 1 0
+                 0110 14.226V5.774a1 1
+                 0 011.555-.832l4.445 3.667V5a1 1
+                 0 012 0v10a1 1 0 01-2 0v-3.667l-4.445 3.5zM2
+                 5v10a1 1 0 002 0V5a1 1 0 00-2 0z" />
           </svg>
         </button>
 
@@ -164,160 +171,134 @@
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M13 9l3 3m0 0l-3 3m3-3H5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              d="M13 9l3 3m0 0l-3 3m3-3H5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </button>
       </div>
 
       <!-- サブコントロール -->
-      <div class="flex items-center justify-center space-x-6 pt-2">
+      <div class="flex items-center justify-center space-x-8 pt-2">
         <button id="shuffle-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="シャッフル">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M12 4.354a4 4 0 110 5.292M12 4.354a4 4 0 100 5.292M12 4.354V1.332A9 9 0 003.332 9.332h3.022a4 4 0 013.646-3.646V4.354zM12 4.354L16.332 9h-3.022A4 4 0 0012 7.646V4.354zM20.668 14.668h-3.022a4 4 0 00-3.646 3.646v1.332a9 9 0 008.668-8.668h-3.022a4 4 0 01-1 1zM20.668 14.668L16.332 10v3.022a4 4 0 011 1h3.336zM3.332 14.668l4.336 4.336h-3.022a4 4 0 01-1-1v-3.336zM3.332 14.668l4.336-4.336v3.022a4 4 0 00-1 1H3.332z"/>
+              d="M12 4.354a4 4 0 110 5.292M12 4.354a4 4 0 100 5.292M12 4.354V1.332A9 9 0 003.332 9.332h3.022a4 4 0 013.646-3.646V4.354zM12 4.354L16.332 9h-3.022A4 4 0 0012 7.646V4.354zM20.668 14.668h-3.022a4 4 0 00-3.646 3.646v1.332a9 9 0 008.668-8.668h-3.022a4 4 0 01-1 1zM20.668 14.668L16.332 10v3.022a4 4 0 011 1h3.336zM3.332 14.668l4.336 4.336h-3.022a4 4 0 01-1-1v-3.336zM3.332 14.668l4.336-4.336v3.022a4 4 0 00-1 1H3.332z" />
           </svg>
         </button>
 
-        <button id="playback-rate-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed text-sm font-bold w-10 h-10" disabled title="再生速度">
+        <button id="playback-rate-btn"
+          class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed text-sm font-bold w-10 h-10"
+          disabled title="再生速度">
           1x
         </button>
 
         <button id="repeat-btn" class="control-btn transition-all transform hover:scale-110 active:scale-95 disabled:cursor-not-allowed" disabled title="リピート">
-          <svg id="repeat-none-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <svg id="repeat-none-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+            viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15"/>
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15" />
           </svg>
-          <svg id="repeat-all-icon" xmlns="http://www.w3.org/2000/svg"
-            class="h-5 w-5 hidden btn-active" fill="none" viewBox="0 0 24 24"
-            stroke="currentColor" stroke-width="2">
+          <svg id="repeat-all-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden btn-active" fill="none"
+            viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15"/>
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15" />
           </svg>
-          <svg id="repeat-one-icon" xmlns="http://www.w3.org/2000/svg"
-            class="h-5 w-5 hidden btn-active" fill="none" viewBox="0 0 24 24"
-            stroke="currentColor" stroke-width="2">
+          <svg id="repeat-one-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden btn-active" fill="none"
+            viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15M9 10h.01M15 10h.01M11 10h.01M13 10h.01M12 11.5a.5.5 0 01-.5.5h-1a.5.5 0 01-.5-.5v-1a.5.5 0 01.5-.5h1a.5.5 0 01.5.5v1z"/>
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2A8.001 8.001 0 0019.418 15m0 0H15M9 10h.01M15 10h.01M11 10h.01M13 10h.01M12 11.5a.5.5 0 01-.5.5h-1a.5.5 0 01-.5-.5v-1a.5.5 0 01.5-.5h1a.5.5 0 01.5.5v1z" />
           </svg>
-        </button>
-
-        <button id="transition-btn" class="control-btn text-xs font-bold w-14 h-10" disabled title="曲の繋ぎ方">
-          NONE
-        </button>
-      </div>
-
-      <!-- EQ / ノーマライズ -->
-      <div class="flex items-center justify-center space-x-4 pt-1">
-        <button id="eq-btn" class="control-btn text-xs font-bold px-3 py-2 rounded-lg" disabled title="EQ">
-          EQ: FLAT
-        </button>
-        <button id="normalize-btn" class="control-btn text-xs font-bold px-3 py-2 rounded-lg" disabled title="ノーマライズ">
-          NORM: ON
-        </button>
-        <button id="wave-btn" class="control-btn text-xs font-bold px-3 py-2 rounded-lg" disabled title="波形表示">
-          WAVE: ON
         </button>
       </div>
 
       <!-- 音量 -->
       <div class="flex items-center space-x-2 pt-2">
         <button id="volume-mute-toggle" class="control-btn p-1" title="ミュート">
-          <svg id="volume-high-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-opacity"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <svg id="volume-high-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-opacity" fill="none"
+            viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1V9a1 1 0 011-1h1.586l4.414-4.414A1 1 0 0112 4v16a1 1 0 01-2 0v-4.586l-4.414 4.414z"/>
+              d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1V9a1 1 0 011-1h1.586l4.414-4.414A1 1 0 0112 4v16a1 1 0 01-2 0v-4.586l-4.414 4.414z" />
           </svg>
-          <svg id="volume-mute-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden transition-opacity"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <svg id="volume-mute-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden transition-opacity" fill="none"
+            viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round"
-              d="M5.586 15H4a1 1 0 01-1-1V9a1 1 0 011-1h1.586l4.414-4.414A1 1 0 0112 4v16a1 1 0 01-2 0v-4.586l-4.414 4.414zm9.646-1.55l-2.001-2.001M15.536 8.464L13.535 10.465"/>
+              d="M5.586 15H4a1 1 0 01-1-1V9a1 1 0 011-1h1.586l4.414-4.414A1 1 0 0112 4v16a1 1 0 01-2 0v-4.586l-4.414 4.414zm9.646-1.55l-2.001-2.001M15.536 8.464L13.535 10.465" />
           </svg>
         </button>
         <input type="range" id="volume-control" min="0" max="1" step="0.01" value="1"
           class="w-full h-2 bg-transparent appearance-none cursor-pointer">
       </div>
     </div>
-
   </div>
 
   <!-- プレイリストパネル -->
   <div id="playlist-panel">
-    <div class="flex justify-between items-center border-b pb-4 mb-4"
-      style="border-color: rgba(255,255,255,0.3);">
+    <div class="flex justify-between items-center border-b pb-4 mb-4" style="border-color: rgba(255,255,255,0.3);">
       <h2 class="text-2xl font-bold">プレイリスト</h2>
-      <button id="playlist-close-btn" class="control-btn p-1" title="閉じる">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6"
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M6 18L18 6M6 6l12 12"/>
+      <button id="playlist-close-btn" class="control-btn p-1">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
     </div>
 
-    <!-- 設定列 -->
-    <div class="flex items-center justify-around space-x-3 mb-4 p-2 rounded-lg"
+    <!-- ✅ ここがはみ出し対策のtoolbar（id追加済み） -->
+    <div id="playlist-toolbar"
+      class="flex items-center justify-around space-x-3 mb-4 p-2 rounded-lg"
       style="background-color: rgba(0,0,0,0.2);">
-      <button id="theme-toggle-btn" class="control-btn p-2" title="テーマ切替">
-        <svg id="theme-sun-icon" xmlns="http://www.w3.org/2000/svg"
-          class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
+
+      <!-- テーマ -->
+      <button id="theme-toggle-btn" class="control-btn p-2" title="テーマ切り替え">
+        <svg id="theme-sun-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
         </svg>
-        <svg id="theme-moon-icon" xmlns="http://www.w3.org/2000/svg"
-          class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
+        <svg id="theme-moon-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
         </svg>
       </button>
 
+      <!-- Viz style -->
       <button id="viz-style-btn" class="control-btn p-2" title="ビジュアライザー変更">
-        <svg id="viz-line-icon" xmlns="http://www.w3.org/2000/svg"
-          class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
+        <svg id="viz-line-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M3 15m0 0l4.5-4.5L12 15l4.5-4.5L21 15"/>
+            d="M3 15m0 0l4.5-4.5L12 15l4.5-4.5L21 15" />
         </svg>
-        <svg id="viz-bars-icon" xmlns="http://www.w3.org/2000/svg"
-          class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
+        <svg id="viz-bars-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M4 16v1m4-1v1m4-1v1m4-1v1m4-1v1M4 12v1m4-1v1m4-1v1m4-1v1m4-1v1M4 8v1m4-1v1m4-1v1m4-1v1m4-1v1M4 4v1m4-1v1m4-1v1m4-1v1m4-1v1"/>
-        </svg>
-        <svg id="viz-dots-icon" xmlns="http://www.w3.org/2000/svg"
-          class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M4 14h.01M8 10h.01M12 14h.01M16 9h.01M20 13h.01"/>
+            d="M4 16v1m4-1v1m4-1v1m4-1v1m4-1v1M4 12v1m4-1v1m4-1v1m4-1v1m4-1v1M4 8v1m4-1v1m4-1v1m4-1v1m4-1v1M4 4v1m4-1v1m4-1v1m4-1v1m4-1v1" />
         </svg>
       </button>
 
-      <button id="sort-btn" class="control-btn p-2 text-xs font-bold" title="ソート">
-        SORT: ADD
-      </button>
-
-      <button id="select-mode-btn" class="control-btn p-2 text-xs font-bold" title="選択モード">
-        SELECT
-      </button>
-
-      <button id="export-btn" class="control-btn p-2 text-xs font-bold" title="EXPORT">
-        EXPORT
-      </button>
-
-      <button id="import-btn" class="control-btn p-2 text-xs font-bold" title="IMPORT">
-        IMPORT
-      </button>
-
-      <button id="clear-playlist-btn" class="control-btn p-2" title="全消去">
+      <!-- プレイリスト全消去 -->
+      <button id="clear-playlist-btn" class="control-btn p-2" title="プレイリストを空にする">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
           viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
       </button>
+
+      <!-- EQ / Normalize / Wave / Transition -->
+      <button id="eq-btn" class="control-btn p-2 text-xs font-bold" title="EQ切替">EQ</button>
+      <button id="normalize-btn" class="control-btn p-2 text-xs font-bold" title="音量正規化">NORM</button>
+      <button id="wave-btn" class="control-btn p-2 text-xs font-bold" title="波形表示">WAVE</button>
+      <button id="transition-btn" class="control-btn p-2 text-xs font-bold" title="曲間遷移">XFADE</button>
+
+      <!-- Sort / Select / RemoveSelected -->
+      <button id="sort-btn" class="control-btn p-2 text-xs font-bold" title="並び替え">SORT</button>
+      <button id="select-btn" class="control-btn p-2 text-xs font-bold" title="選択モード">SEL</button>
+      <button id="remove-selected-btn" class="control-btn p-2 text-xs font-bold" title="選択曲削除">DEL</button>
+
+      <!-- Import / Export -->
+      <button id="import-btn" class="control-btn p-2 text-xs font-bold" title="プレイリストImport">IMPORT</button>
+      <button id="export-btn" class="control-btn p-2 text-xs font-bold" title="プレイリストExport">EXPORT</button>
     </div>
 
     <!-- 検索 -->
@@ -328,15 +309,17 @@
     </div>
 
     <ul id="playlist-ul" class="space-y-3 overflow-y-auto"
-      style="height: calc(100% - 13rem);">
+      style="height: calc(100% - 16rem);">
       <li class="placeholder text-center pt-10">曲をドロップしてください</li>
     </ul>
   </div>
 
-  <!-- トースト -->
-  <div id="toast"><span id="toast-message"></span></div>
+  <!-- Toast -->
+  <div id="toast">
+    <span id="toast-message"></span>
+  </div>
 
-  <!-- メインJS -->
+  <!-- main.js -->
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

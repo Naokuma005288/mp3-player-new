@@ -9,14 +9,21 @@ export class PlayerCore {
 
     this.events = new Map();
 
-    this.active = "a"; // a/b
+    this.active = "a";
     this.audioA = ui.audioA;
     this.audioB = ui.audioB;
 
-    this.bundleA = audioFx.attach(this.audioA);
-    this.bundleB = audioFx.attach(this.audioB);
+    // AudioFx attach（失敗しても再生は止めない）
+    try {
+      this.bundleA = audioFx.attach(this.audioA);
+      this.bundleB = audioFx.attach(this.audioB);
+    } catch (e) {
+      console.warn("[AudioFx.attach] failed, fallback to plain audio", e);
+      this.bundleA = { gain: null };
+      this.bundleB = { gain: null };
+    }
 
-    this.playbackRates = [1,1.25,1.5,2,0.75];
+    this.playbackRates = [1, 1.25, 1.5, 2, 0.75];
     this.currentRateIndex = settings.get("playbackRateIndex") || 0;
 
     this.lastVolume = settings.get("lastVolume") || 1;
@@ -37,16 +44,20 @@ export class PlayerCore {
   _bindAudioEvents(audio) {
     audio.addEventListener("play", () => this.emit("playstate", false));
     audio.addEventListener("pause", () => this.emit("playstate", true));
+
     audio.addEventListener("timeupdate", () => {
-      const cur = audio.currentTime || 0;
-      const dur = audio.duration || 0;
-      if (this.isActive(audio)) this.emit("time", { currentTime: cur, duration: dur });
+      if (!this.isActive(audio)) return;
+      this.emit("time", {
+        currentTime: audio.currentTime || 0,
+        duration: audio.duration || 0,
+      });
     });
+
     audio.addEventListener("ended", () => {
       if (!this.isActive(audio)) return;
       if (this.playlist.repeatMode === "one") {
         audio.currentTime = 0;
-        audio.play();
+        audio.play().catch(() => {});
       } else {
         this.playNext();
       }
@@ -65,7 +76,8 @@ export class PlayerCore {
     return this.active === "a" ? this.audioB : this.audioA;
   }
   getCurrentGainNode() {
-    return this.active === "a" ? this.bundleA.gain : this.bundleB.gain;
+    const b = this.active === "a" ? this.bundleA : this.bundleB;
+    return b?.gain || null;
   }
 
   updateControls() {
@@ -78,41 +90,55 @@ export class PlayerCore {
       this.ui.playlistToggleBtn, this.ui.playbackRateBtn,
       this.ui.eqBtn, this.ui.normalizeBtn, this.ui.waveBtn, this.ui.transitionBtn
     ];
-    controls.forEach(el => { if (el) el.disabled = disabled; }); // v3.9.1 fix
+    controls.forEach(el => { if (el) el.disabled = disabled; });
+
     if (this.ui.fileSelectUI) {
       this.ui.fileSelectUI.classList.toggle("file-select-hidden", !disabled);
     }
   }
 
-  prepareTrack(index) {
-    const track = this.playlist.tracks[index];
-    if (!track) return;
+  // playable解決（ghost回避）
+  _resolvePlayableIndex(index, dir = 1) {
+    const t = this.playlist.tracks[index];
+    if (t && t.file) return index;
+    return this.playlist.getFirstPlayableIndex(index, dir);
+  }
 
-    this.playlist.currentTrackIndex = index;
+  prepareTrack(index) {
+    const playable = this._resolvePlayableIndex(index, 1);
+    if (playable === -1) return;
+
+    const track = this.playlist.tracks[playable];
+    this.playlist.currentTrackIndex = playable;
+
     this._setSource(this.getActiveAudio(), track);
     this._applyTrackFx(track);
 
-    this.emit("trackchange", index);
+    this.emit("trackchange", playable);
   }
 
-  loadTrack(index, autoplay=true) {
-    const track = this.playlist.tracks[index];
-    if (!track) return;
+  loadTrack(index, autoplay = true) {
+    const playable = this._resolvePlayableIndex(index, 1);
+    if (playable === -1) return;
 
+    // ✅ AudioContextの起こし忘れ防止
+    this.audioFx?.ensureContext?.();
+    this.audioFx?.resumeContext?.();
+
+    const track = this.playlist.tracks[playable];
     const mode = this.settings.get("transitionMode");
     const sec = this.settings.get("crossfadeSec");
 
     if (mode === "crossfade" && this.playlist.currentTrackIndex !== -1) {
       this._crossfadeTo(track, sec, autoplay);
     } else {
-      // gapless or none
       this._switchTo(track, autoplay);
     }
   }
 
   _setSource(audio, track) {
     if (!track.file) {
-      audio.src = ""; // ghost
+      audio.src = "";
       return;
     }
     const url = URL.createObjectURL(track.file);
@@ -121,38 +147,48 @@ export class PlayerCore {
   }
 
   _applyTrackFx(track) {
+    // ✅ hotfix: gainが0や極小なら無音化回避で1に戻す
+    const safeGain = (track.gain && track.gain > 0.02) ? track.gain : 1;
+
     const gainNode = this.getCurrentGainNode();
-    this.audioFx.applyNormalizeToCurrent(gainNode, track.gain || 1);
-    this.audioFx.applyEqPresetToAll();
+    if (gainNode) {
+      this.audioFx.applyNormalizeToCurrent?.(gainNode, safeGain);
+    }
+    this.audioFx.applyEqPresetToAll?.();
   }
 
   _switchTo(track, autoplay) {
     const a = this.getActiveAudio();
     a.pause();
+
     this._setSource(a, track);
     this._applyTrackFx(track);
+
     this.playlist.currentTrackIndex = this.playlist.tracks.indexOf(track);
     this.emit("trackchange", this.playlist.currentTrackIndex);
-    if (autoplay) a.play().catch(()=>{});
+
+    if (autoplay) {
+      const p = a.play();
+      if (p) p.catch(()=>{});
+    }
   }
 
-  _crossfadeTo(track, sec=2, autoplay=true) {
+  _crossfadeTo(track, sec = 2, autoplay = true) {
     const curA = this.getActiveAudio();
     const nextA = this.getInactiveAudio();
 
-    const curBundle = this.active==="a"?this.bundleA:this.bundleB;
-    const nextBundle = this.active==="a"?this.bundleB:this.bundleA;
+    const curBundle = this.active==="a" ? this.bundleA : this.bundleB;
+    const nextBundle = this.active==="a" ? this.bundleB : this.bundleA;
 
     this._setSource(nextA, track);
     nextA.currentTime = 0;
-    nextA.volume = 1; // audio element volumeは最終ミックスの前段
-    nextBundle.gain.gain.value = 0;
+
+    if (nextBundle?.gain) nextBundle.gain.gain.value = 0;
 
     this.playlist.currentTrackIndex = this.playlist.tracks.indexOf(track);
     this.emit("trackchange", this.playlist.currentTrackIndex);
 
     if (!autoplay) {
-      // active切替だけ
       this.active = this.active==="a"?"b":"a";
       return;
     }
@@ -164,17 +200,16 @@ export class PlayerCore {
 
     const fade = (now) => {
       const t = clamp((now - start) / durMs, 0, 1);
-      curBundle.gain.gain.value = 1 - t;
-      nextBundle.gain.gain.value = t;
+      if (curBundle?.gain) curBundle.gain.gain.value = 1 - t;
+      if (nextBundle?.gain) nextBundle.gain.gain.value = t;
 
       if (t < 1) requestAnimationFrame(fade);
       else {
         curA.pause();
         curA.currentTime = 0;
-        curBundle.gain.gain.value = 1;
+        if (curBundle?.gain) curBundle.gain.gain.value = 1;
 
         this.active = this.active==="a"?"b":"a";
-        // 次の曲のgain再適用
         this._applyTrackFx(track);
       }
     };
@@ -182,6 +217,10 @@ export class PlayerCore {
   }
 
   togglePlayPause() {
+    // ✅ AudioContext起動の保険
+    this.audioFx?.ensureContext?.();
+    this.audioFx?.resumeContext?.();
+
     const a = this.getActiveAudio();
     if (a.paused) a.play().catch(()=>{});
     else a.pause();
@@ -197,31 +236,40 @@ export class PlayerCore {
   playNext() {
     const len = this.playlist.tracks.length;
     if (len === 0) return;
+
     let idx = this.playlist.currentTrackIndex;
     if (idx === -1) idx = 0;
-
     idx++;
+
     if (idx >= len) {
       if (this.playlist.repeatMode === "all") idx = 0;
-      else { this.prepareTrack(0); return; }
+      else return;
     }
-    this.loadTrack(idx, true);
+
+    const playable = this._resolvePlayableIndex(idx, 1);
+    if (playable === -1) return;
+    this.loadTrack(playable, true);
   }
 
   playPrev() {
     const len = this.playlist.tracks.length;
     if (len === 0) return;
+
     const a = this.getActiveAudio();
     if (a.currentTime > 5) { a.currentTime = 0; return; }
 
     let idx = this.playlist.currentTrackIndex;
     if (idx === -1) idx = 0;
     idx--;
+
     if (idx < 0) {
       if (this.playlist.repeatMode === "all") idx = len-1;
       else { a.currentTime = 0; return; }
     }
-    this.loadTrack(idx, true);
+
+    const playable = this._resolvePlayableIndex(idx, -1);
+    if (playable === -1) return;
+    this.loadTrack(playable, true);
   }
 
   seek(sec) {

@@ -281,3 +281,34 @@ input[type=range]::-moz-range-track {
   bottom: 2rem;
   opacity: 1;
 }
+
+/* ===== v3.9.1 hotfix: playlist buttons overflow fix ===== */
+#playlist-panel .flex.items-center.justify-around.space-x-3 {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+
+/* Tailwindのspace-x-3が折り返し時に悪さするので無効化 */
+#playlist-panel .flex.items-center.justify-around.space-x-3 > * {
+  margin-left: 0 !important;
+}
+
+/* ボタンが多いときも見やすく */
+#playlist-panel .flex.items-center.justify-around.space-x-3 button {
+  flex: 0 0 auto;
+}
+
+/* ===== v3.9.1 hotfix2: playlist toolbar overflow fix ===== */
+#playlist-toolbar{
+  display: flex;
+  flex-wrap: wrap;          /* 折り返し */
+  justify-content: flex-start;
+  gap: 0.5rem;              /* 余白はgapで作る */
+}
+
+/* Tailwindのspace-x系が折返し時に悪さするのでリセット */
+#playlist-toolbar > *{
+  margin-left: 0 !important;
+  flex: 0 0 auto;           /* 変な伸び防止 */
+}
