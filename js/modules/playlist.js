@@ -115,7 +115,7 @@ export class Playlist {
   }
 
   // ============================
-  // ★ここが今回の根本修正入り addFiles
+  // addFiles（AudioFx互換耐性あり）
   // ============================
   async addFiles(files, audioFx){
     const newFiles = Array.from(files).filter(isMp3File);
@@ -145,11 +145,19 @@ export class Playlist {
     this.save();
   }
 
+  // ✅ メタデータ読み込み完了時にUI更新イベントを投げる
+  _emitMetadata(index){
+    window.dispatchEvent(new CustomEvent("playlist:metadata", {
+      detail: { index }
+    }));
+  }
+
   _readMetadata(file, index){
     const jsmediatags = window.jsmediatags;
     if (!jsmediatags) {
       this.tracks[index].artist = "不明なアーティスト";
       this.save();
+      this._emitMetadata(index);
       return;
     }
 
@@ -172,10 +180,12 @@ export class Playlist {
         this.tracks[index].artwork = artworkUrl;
 
         this.save();
+        this._emitMetadata(index);
       },
       onError: () => {
         this.tracks[index].artist = "メタデータなし";
         this.save();
+        this._emitMetadata(index);
       }
     });
   }
@@ -189,6 +199,8 @@ export class Playlist {
       this.tracks[index].duration = temp.duration || 0;
       URL.revokeObjectURL(url);
       this.save();
+      // duration更新もUIに反映
+      this._emitMetadata(index);
     }, { once: true });
 
     temp.addEventListener("error", () => {

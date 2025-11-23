@@ -1,4 +1,4 @@
-// js/main.js  v3.9.1 hotfix-root full
+// js/main.js  v3.9.2 hotfix-artwork full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -118,6 +118,16 @@ const visualizer = ui.visualizerCanvas
   ? new Visualizer(ui.visualizerCanvas, settings, audioFx)
   : null;
 visualizer?.start?.();
+
+// ✅ メタデータ/アートワーク更新イベントを受けてUI再描画
+window.addEventListener("playlist:metadata", (e) => {
+  const idx = e.detail?.index;
+  renderPlaylist(); // プレイリスト側サムネ更新
+
+  if (idx === playlist.currentTrackIndex) {
+    updateMainUI(idx); // メイン側アルバムアート更新
+  }
+});
 
 playlist.reloadFromPersist?.();
 renderPlaylist();
