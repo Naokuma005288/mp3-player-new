@@ -85,7 +85,7 @@
   --toast-text:#1f2937;
 }
 
-/* dark mode */
+/* New dark mode (3-mode cycle) */
 .dark-mode{
   --bg-gradient-from:#05060a;
   --bg-gradient-via:#0f172a;
@@ -223,16 +223,20 @@ input[type=range]::-moz-range-track{
 }
 #playlist-panel.open{transform:translateX(0);}
 
-.playlist-item{background-color:transparent;transition:background-color .2s, box-shadow .2s;}
+.playlist-item{background-color:transparent;transition:background-color .2s;}
 .playlist-item:hover{background-color:var(--playlist-item-hover);}
 .playlist-item.active{
   background-color:var(--playlist-item-active);
   box-shadow:0 0 0 2px var(--playlist-ring);
 }
-/* ✅ P1: multi-select highlight (activeと両立) */
+
+/* ✅ multi-select highlight */
 .playlist-item.selected{
   background-color:var(--playlist-item-hover);
-  box-shadow:0 0 0 2px var(--playlist-ring) inset;
+  box-shadow:0 0 0 1.5px var(--playlist-ring);
+}
+.playlist-item.selected.active{
+  box-shadow:0 0 0 2px var(--playlist-ring);
 }
 
 #playlist-search{
@@ -269,37 +273,5 @@ input[type=range]::-moz-range-track{
 /* waveform canvas behind seekbar */
 #wave-canvas{
   position:absolute;left:0;right:0;top:0;height:28px;width:100%;
-  opacity:0.35;pointer-events:auto; /* ✅クリックシーク用に有効化 */
-  cursor:pointer;
-}
-
-/* ✅ Splash styles */
-#splash-screen{
-  position:fixed;inset:0;z-index:200;
-  display:flex;align-items:center;justify-content:center;
-  background:rgba(0,0,0,0.45);
-  backdrop-filter:blur(12px);
-  -webkit-backdrop-filter:blur(12px);
-  transition:opacity .5s ease, transform .5s ease;
-}
-#splash-screen.hide{
-  opacity:0;
-  pointer-events:none;
-  transform:scale(1.02);
-}
-#splash-card{
-  padding:1.5rem 2rem;border-radius:1rem;
-  background:var(--glass-bg);
-  border:1px solid var(--glass-border);
-  box-shadow:0 8px 32px 0 var(--glass-shadow);
-  text-align:center;
-}
-.splash-logo{
-  font-weight:700;font-size:1.4rem;letter-spacing:.04em;
-}
-.splash-version{
-  margin-top:.25rem;font-size:.9rem;opacity:.8;
-}
-.splash-loading{
-  margin-top:.75rem;font-size:.9rem;opacity:.7;
+  opacity:0.35;pointer-events:none;
 }

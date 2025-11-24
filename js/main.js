@@ -1,4 +1,4 @@
-// js/main.js v4.3.0 full
+// js/main.js v4.4.0 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -7,9 +7,9 @@ import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
 import { formatTime, isMp3File } from "./modules/utils.js";
 
-const APP_VERSION = "v4.3.0";
+const APP_VERSION = "v4.4.0";
 
-// UI
+// ---------------- UI ----------------
 const ui = {
   audioA: document.getElementById("audio-a"),
   audioB: document.getElementById("audio-b"),
@@ -79,22 +79,16 @@ const ui = {
   versionLabel: document.getElementById("version-label"),
 };
 
-// --- Splash control ---
-const splashStart = performance.now();
+// ✅ FIX: selectedIndices を renderPlaylist より前に初期化する
+let dragFromIndex = null;
+const selectedIndices = new Set();
+let lastSelectedIndex = null;
+
+// バージョン表示
 if (ui.splashVersion) ui.splashVersion.textContent = APP_VERSION;
 if (ui.versionLabel) ui.versionLabel.textContent = APP_VERSION;
 
-function hideSplash(){
-  const minMs = 500;
-  const elapsed = performance.now() - splashStart;
-  const wait = Math.max(0, minMs - elapsed);
-  setTimeout(()=>{
-    ui.splash?.classList.add("hide");
-    ui.splash?.setAttribute("aria-hidden","true");
-  }, wait);
-}
-
-// toast
+// ---------------- Toast ----------------
 let toastTimer=null;
 function showToast(msg, isErr=false){
   if (!ui.toast) return;
@@ -105,7 +99,7 @@ function showToast(msg, isErr=false){
   toastTimer=setTimeout(()=>ui.toast.classList.remove("show"),3000);
 }
 
-// modules
+// ---------------- Modules ----------------
 const settings = new Settings("mp3PlayerSettings_v4");
 const persist = new PlaylistPersist("mp3PlayerPlaylist_v4");
 const audioFx = new AudioFx(settings);
@@ -118,21 +112,94 @@ const visualizer = ui.visualizerCanvas
   : null;
 visualizer?.start?.();
 
-// init load
-try{
-  playlist.reloadFromPersist();
-  renderPlaylist();
-  player.updateControls();
-  updateFileUIState();
-  updateThemeIcons();
-  updateVizIcons();
-  updateRepeatIcons();
-  updateShuffleUi();
-  updatePlaybackRateUi();
-  drawWaveformForCurrent();
-} finally {
-  hideSplash();
+// ---------------- PWA register ----------------
+if ("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("./sw.js")
+      .then(()=>console.log("[PWA] Service Worker registered"))
+      .catch(err=>console.warn("[PWA] SW register failed:", err));
+  });
 }
+
+// ---------------- Background playback 강화 ----------------
+// Media Session API
+function canMediaSession(){
+  return "mediaSession" in navigator;
+}
+function setupMediaSessionHandlers(){
+  if (!canMediaSession()) return;
+
+  navigator.mediaSession.setActionHandler("play", ()=>player.togglePlayPause(false));
+  navigator.mediaSession.setActionHandler("pause", ()=>player.togglePlayPause(true));
+  navigator.mediaSession.setActionHandler("previoustrack", ()=>player.playPrev());
+  navigator.mediaSession.setActionHandler("nexttrack", ()=>player.playNext());
+  navigator.mediaSession.setActionHandler("seekbackward", ()=>player.seek(-10));
+  navigator.mediaSession.setActionHandler("seekforward", ()=>player.seek(10));
+  navigator.mediaSession.setActionHandler("seekto", (details)=>{
+    if (!details.seekTime) return;
+    const a = player.getActiveAudio();
+    if (!a?.duration) return;
+    const pct = (details.seekTime / a.duration) * 100;
+    player.commitSeek(pct);
+  });
+}
+function updateMediaMetadata(index){
+  if (!canMediaSession()) return;
+  const t = playlist.tracks[index];
+  if (!t) return;
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: t.title || "Unknown Title",
+    artist: t.artist || "Unknown Artist",
+    album: t.album || "",
+    artwork: t.artwork
+      ? [{ src: t.artwork, sizes:"512x512", type:"image/png" }]
+      : []
+  });
+}
+function updateMediaPosition(){
+  if (!canMediaSession()) return;
+  const a = player.getActiveAudio();
+  if (!a?.duration) return;
+  try{
+    navigator.mediaSession.setPositionState({
+      duration: a.duration,
+      playbackRate: a.playbackRate || 1,
+      position: a.currentTime || 0
+    });
+  }catch{}
+}
+setupMediaSessionHandlers();
+
+// Wake Lock
+let wakeLock = null;
+async function requestWakeLock(){
+  if (!("wakeLock" in navigator)) return;
+  try{
+    wakeLock = await navigator.wakeLock.request("screen");
+  }catch{}
+}
+async function releaseWakeLock(){
+  try{ await wakeLock?.release(); }catch{}
+  wakeLock = null;
+}
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState === "visible" && wakeLock && !player.getActiveAudio().paused){
+    requestWakeLock();
+  }
+});
+
+// ---------------- init load ----------------
+playlist.reloadFromPersist();
+renderPlaylist();
+player.updateControls();
+updateFileUIState();
+updateThemeIcons();
+updateVizIcons();
+updateRepeatIcons();
+updateShuffleUi();
+updatePlaybackRateUi();
+drawWaveformForCurrent();
 
 // metadata update event
 window.addEventListener("playlist:metadata", (e)=>{
@@ -141,10 +208,11 @@ window.addEventListener("playlist:metadata", (e)=>{
   if (idx===playlist.currentTrackIndex){
     updateMainUI(idx);
     drawWaveformForCurrent();
+    updateMediaMetadata(idx);
   }
 });
 
-// file handlers
+// ---------------- file handlers ----------------
 ui.fileInput?.addEventListener("change", async(e)=>{
   const files=e.target.files;
   if (!files?.length) return;
@@ -196,13 +264,14 @@ async function handleFiles(files){
       player.prepareTrack(first);
       updateMainUI(first);
       drawWaveformForCurrent();
+      updateMediaMetadata(first);
     }
   }
 
   showToast(`${mp3s.length} 曲を追加しました`);
 }
 
-// controls
+// ---------------- controls ----------------
 ui.playPauseBtn?.addEventListener("click", ()=>{
   if (!playlist.tracks.length) return;
 
@@ -253,7 +322,7 @@ ui.progressBar?.addEventListener("change",(e)=>{
   player.commitSeek(p);
 });
 
-// ✅ P0: waveform click to seek
+// waveform click seek
 ui.waveCanvas?.addEventListener("click",(e)=>{
   const a=player.getActiveAudio();
   if (!a.duration) return;
@@ -274,7 +343,7 @@ ui.volumeMuteToggle?.addEventListener("click", ()=>{
   updateVolumeIcon(v);
 });
 
-// playlist panel
+// ---------------- playlist panel ----------------
 function togglePlaylist(){ ui.playlistPanel?.classList.toggle("open"); }
 ui.playlistToggleBtn?.addEventListener("click",togglePlaylist);
 ui.playlistCloseBtn?.addEventListener("click",togglePlaylist);
@@ -295,7 +364,7 @@ ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   showToast("プレイリストをクリアしました");
 });
 
-// theme (3-mode cycle)
+// theme
 ui.themeToggleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("theme")||"normal";
   const next = cur==="normal" ? "light" : (cur==="light" ? "dark" : "normal");
@@ -331,20 +400,29 @@ ui.dropZone?.addEventListener("click", ()=>{
   ui.playPauseBtn.click();
 });
 
-// PlayerCore events
+// ---------------- PlayerCore events ----------------
 player.on("playstate",(isPaused)=>{
   updatePlayPauseIcon(isPaused);
   updateMinimalOverlay(isPaused);
   highlightCurrentTrack();
+
+  if (!isPaused) requestWakeLock();
+  else releaseWakeLock();
+
+  if (canMediaSession()){
+    navigator.mediaSession.playbackState = isPaused ? "paused" : "playing";
+  }
 });
 player.on("trackchange",(idx)=>{
   updateMainUI(idx);
   highlightCurrentTrack();
   setDuration();
   drawWaveformForCurrent();
+  updateMediaMetadata(idx);
 });
 player.on("time",({currentTime,duration})=>{
   updateProgress(currentTime,duration);
+  updateMediaPosition();
 });
 
 // ---------------- UI helpers ----------------
@@ -461,7 +539,7 @@ function updateVizIcons(){
   ui.vizBarsIcon.classList.toggle("hidden", style!=="bars");
 }
 
-// ---------------- waveform seekbar bg ----------------
+// ---------------- waveform ----------------
 function drawWaveformForCurrent(){
   if (!ui.waveCanvas) return;
   if (!settings.get("waveformOn")) {
@@ -495,11 +573,7 @@ function drawWaveformForCurrent(){
   }
 }
 
-// ---------------- render playlist + D&D reorder + multi-select ----------------
-let dragFromIndex=null;
-let lastSelectedIndex=null;
-const selectedIndices = new Set();
-
+// ---------------- render playlist + multi-select ----------------
 function clearSelection(){
   selectedIndices.clear();
   lastSelectedIndex=null;
@@ -523,10 +597,8 @@ function renderPlaylist(){
     li.dataset.index=index;
     li.id=`track-${index}`;
 
-    // selection highlight
     if (selectedIndices.has(index)) li.classList.add("selected");
 
-    // draggable
     li.draggable=true;
     li.addEventListener("dragstart", ()=>{ dragFromIndex=index; });
     li.addEventListener("dragover", (e)=>{ e.preventDefault(); });
@@ -580,7 +652,6 @@ function renderPlaylist(){
       const isCtrl = e.ctrlKey || e.metaKey;
       const isShift = e.shiftKey;
 
-      // multi-select logic
       if (isShift && lastSelectedIndex!=null){
         const a=Math.min(lastSelectedIndex,index);
         const b=Math.max(lastSelectedIndex,index);
@@ -596,11 +667,11 @@ function renderPlaylist(){
         return;
       }
 
-      // normal click = play + clear selection
       clearSelection();
       playlist.currentTrackIndex=index;
       player.loadTrack(index,true);
       updateMainUI(index);
+      updateMediaMetadata(index);
       renderPlaylist();
     });
 
@@ -614,7 +685,6 @@ function renderPlaylist(){
 document.addEventListener("keydown",(e)=>{
   if (e.target===ui.playlistSearch) return;
 
-  // delete selected tracks
   if ((e.code==="Delete" || e.code==="Backspace") && selectedIndices.size){
     e.preventDefault();
     const toDelete=[...selectedIndices].sort((a,b)=>b-a);
