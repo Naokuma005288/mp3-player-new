@@ -1,4 +1,4 @@
-// js/main.js v4.0.0-beta full
+// js/main.js v4.0.0 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -7,7 +7,6 @@ import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
 import { formatTime, isMp3File } from "./modules/utils.js";
 
-// UI
 const ui = {
   audioA: document.getElementById("audio-a"),
   audioB: document.getElementById("audio-b"),
@@ -64,6 +63,7 @@ const ui = {
   vizStyleBtn: document.getElementById("viz-style-btn"),
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
+  vizDotsIcon: document.getElementById("viz-dots-icon"),
 
   visualizerCanvas: document.getElementById("visualizer-canvas"),
 
@@ -71,7 +71,6 @@ const ui = {
   toastMessage: document.getElementById("toast-message"),
 };
 
-// toast
 let toastTimer=null;
 function showToast(msg, isErr=false){
   if (!ui.toast) return;
@@ -82,20 +81,17 @@ function showToast(msg, isErr=false){
   toastTimer=setTimeout(()=>ui.toast.classList.remove("show"),3000);
 }
 
-// modules
 const settings = new Settings("mp3PlayerSettings_v4");
 const persist = new PlaylistPersist("mp3PlayerPlaylist_v4");
 const audioFx = new AudioFx(settings);
 const playlist = new Playlist(settings, persist);
 const player = new PlayerCore(ui, playlist, settings, audioFx);
 
-// visualizer
 const visualizer = ui.visualizerCanvas
   ? new Visualizer(ui.visualizerCanvas, settings, audioFx)
   : null;
 visualizer?.start?.();
 
-// init load
 playlist.reloadFromPersist();
 renderPlaylist();
 player.updateControls();
@@ -107,7 +103,6 @@ updateShuffleUi();
 updatePlaybackRateUi();
 drawWaveformForCurrent();
 
-// metadata update event (artwork, duration, wave)
 window.addEventListener("playlist:metadata", (e)=>{
   const idx=e.detail?.index;
   renderPlaylist();
@@ -117,7 +112,6 @@ window.addEventListener("playlist:metadata", (e)=>{
   }
 });
 
-// file handlers
 ui.fileInput?.addEventListener("change", async(e)=>{
   const files=e.target.files;
   if (!files?.length) return;
@@ -175,7 +169,6 @@ async function handleFiles(files){
   showToast(`${mp3s.length} 曲を追加しました`);
 }
 
-// controls
 ui.playPauseBtn?.addEventListener("click", ()=>{
   if (!playlist.tracks.length) return;
 
@@ -236,7 +229,6 @@ ui.volumeMuteToggle?.addEventListener("click", ()=>{
   updateVolumeIcon(v);
 });
 
-// playlist panel
 function togglePlaylist(){ ui.playlistPanel?.classList.toggle("open"); }
 ui.playlistToggleBtn?.addEventListener("click",togglePlaylist);
 ui.playlistCloseBtn?.addEventListener("click",togglePlaylist);
@@ -256,7 +248,6 @@ ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   showToast("プレイリストをクリアしました");
 });
 
-// theme (3-mode cycle)
 ui.themeToggleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("theme")||"normal";
   const next = cur==="normal" ? "light" : (cur==="light" ? "dark" : "normal");
@@ -272,7 +263,6 @@ function applyTheme(mode){
 }
 applyTheme(settings.get("theme")||"normal");
 
-// viz
 ui.vizStyleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("visualizerStyle")||"line";
   const next=cur==="line" ? "bars" : (cur==="bars" ? "dots" : "line");
@@ -280,7 +270,6 @@ ui.vizStyleBtn?.addEventListener("click", ()=>{
   updateVizIcons();
 });
 
-// minimal mode
 ui.dropZone?.addEventListener("dblclick", ()=>{
   if (!playlist.tracks.length) return;
   ui.playerContainer.classList.toggle("minimal");
@@ -307,8 +296,11 @@ player.on("trackchange",(idx)=>{
 player.on("time",({currentTime,duration})=>{
   updateProgress(currentTime,duration);
 });
+// 追加：PlayerCore からのtoast
+player.on("toast", ({msg, isErr})=>{
+  showToast(msg, !!isErr);
+});
 
-// ---------------- UI helpers ----------------
 function updateFileUIState(){
   ui.fileSelectUI?.classList.toggle("file-select-hidden", playlist.tracks.length>0);
 }
@@ -413,9 +405,9 @@ function updateVizIcons(){
   const style=settings.get("visualizerStyle")||"line";
   ui.vizLineIcon.classList.toggle("hidden", style!=="line");
   ui.vizBarsIcon.classList.toggle("hidden", style!=="bars");
+  ui.vizDotsIcon.classList.toggle("hidden", style!=="dots");
 }
 
-// ---------------- waveform seekbar bg ----------------
 function drawWaveformForCurrent(){
   if (!ui.waveCanvas) return;
   if (!settings.get("waveformOn")) {
@@ -449,7 +441,6 @@ function drawWaveformForCurrent(){
   }
 }
 
-// ---------------- render playlist + D&D reorder ----------------
 let dragFromIndex=null;
 
 function renderPlaylist(){
@@ -470,7 +461,6 @@ function renderPlaylist(){
     li.dataset.index=index;
     li.id=`track-${index}`;
 
-    // draggable
     li.draggable=true;
     li.addEventListener("dragstart", ()=>{ dragFromIndex=index; });
     li.addEventListener("dragover", (e)=>{ e.preventDefault(); });
@@ -529,7 +519,6 @@ function renderPlaylist(){
   highlightCurrentTrack();
 }
 
-// keyboard
 document.addEventListener("keydown",(e)=>{
   if (e.target===ui.playlistSearch) return;
   if (!playlist.tracks.length) return;

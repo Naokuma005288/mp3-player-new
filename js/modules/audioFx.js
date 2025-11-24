@@ -8,7 +8,6 @@ export default class AudioFx {
     this.ctx = null;
     this.bundles = new Map(); // audioEl -> bundle
 
-    // EQ presets
     this.eqPresets = {
       flat:   { low:0, mid:0, high:0 },
       bass:   { low:6, mid:0, high:-2 },
@@ -30,7 +29,6 @@ export default class AudioFx {
     }
   }
 
-  // ✅ A/B 同時 attach できる構造に刷新（多重detach無し）
   attach(audioEl){
     if (!audioEl) return null;
     const ctx = this.ensureContext();
@@ -57,7 +55,7 @@ export default class AudioFx {
     high.type = "highshelf"; high.frequency.value = 6000;
 
     const gain = ctx.createGain();
-    gain.gain.value = (this.settings.get("volume") ?? 1);
+    gain.gain.value = 1; // ★ここ重要：volume二重掛け防止（normalize専用）
 
     // chain
     source.connect(analyser);
@@ -70,8 +68,12 @@ export default class AudioFx {
     const bundle = { audioEl, source, analyser, low, mid, high, gain };
     this.bundles.set(audioEl, bundle);
 
-    // apply EQ preset now
     this.applyEqPresetToBundle(bundle);
+
+    // ★Visualizerに後付け接続させる通知
+    window.dispatchEvent(new CustomEvent("audiofx:attach", {
+      detail: { audioEl, bundle }
+    }));
 
     return bundle;
   }
@@ -102,18 +104,13 @@ export default class AudioFx {
   getBundles(){
     return [...this.bundles.values()];
   }
-
-  get nodes(){
-    return this.getBundles();
-  }
+  get nodes(){ return this.getBundles(); }
 
   getAnalyserFor(audioEl){
     return this.bundles.get(audioEl)?.analyser || null;
   }
 
-  // -------------------------
   // Normalize / EQ
-  // -------------------------
   applyNormalizeToCurrent(gainNode, trackGain=1){
     const on = !!this.settings.get("normalizeOn");
     if (!gainNode) return;
@@ -144,9 +141,7 @@ export default class AudioFx {
     return v;
   }
 
-  // -------------------------
-  // Analysis (v4 beta)
-  // -------------------------
+  // Analysis (v4 stable)
   async analyzeAndGetGain(file){
     try{
       const ctx = this.ensureContext();
@@ -159,7 +154,7 @@ export default class AudioFx {
         sumSq += v*v;
       }
       const rms = Math.sqrt(sumSq / ch0.length) || 0.0001;
-      const targetRms = 0.12; // ざっくり -14LUFS 付近
+      const targetRms = 0.12;
       const gain = clamp(targetRms / rms, 0.25, 4);
       return gain;
     }catch{
@@ -188,7 +183,6 @@ export default class AudioFx {
         peaks[i] = peak;
       }
 
-      // normalize 0..1
       const max = Math.max(...peaks, 0.0001);
       return peaks.map(p => p/max);
     }catch{
