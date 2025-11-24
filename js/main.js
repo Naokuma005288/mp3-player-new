@@ -1,4 +1,4 @@
-// js/main.js v4.1.0 full
+// js/main.js v4.2.0 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -7,7 +7,7 @@ import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
 import { formatTime, isMp3File } from "./modules/utils.js";
 
-const APP_VERSION = "v4.1.0";
+const APP_VERSION = "4.2.0";
 
 // UI
 const ui = {
@@ -16,6 +16,8 @@ const ui = {
 
   fileInput: document.getElementById("file-input"),
   folderInput: document.getElementById("folder-input"),
+  relinkInput: document.getElementById("relink-input"),
+
   dropZone: document.getElementById("drop-zone"),
   albumArt: document.getElementById("album-art"),
   progressBar: document.getElementById("progress-bar"),
@@ -67,11 +69,23 @@ const ui = {
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
 
+  normalizeBtn: document.getElementById("normalize-btn"),
+  eqSelect: document.getElementById("eq-select"),
+
+  listSelect: document.getElementById("list-select"),
+  listNewBtn: document.getElementById("list-new-btn"),
+  listDelBtn: document.getElementById("list-del-btn"),
+
   visualizerCanvas: document.getElementById("visualizer-canvas"),
 
   toast: document.getElementById("toast"),
   toastMessage: document.getElementById("toast-message"),
+
+  versionLabel: document.getElementById("version-label"),
 };
+
+// version label
+if (ui.versionLabel) ui.versionLabel.textContent = `v${APP_VERSION}`;
 
 // toast
 let toastTimer=null;
@@ -82,37 +96,6 @@ function showToast(msg, isErr=false){
   ui.toast.style.backgroundColor = isErr ? "var(--thumb-color)" : "var(--toast-bg)";
   ui.toast.classList.add("show");
   toastTimer=setTimeout(()=>ui.toast.classList.remove("show"),3000);
-}
-
-// version badge
-function injectVersionBadge(){
-  if (!ui.playerContainer) return;
-
-  let badge = document.getElementById("version-badge");
-  if (!badge){
-    badge = document.createElement("div");
-    badge.id = "version-badge";
-    ui.playerContainer.appendChild(badge);
-  }
-
-  badge.textContent = APP_VERSION;
-
-  badge.style.position = "absolute";
-  badge.style.left = "12px";
-  badge.style.top = "12px";
-  badge.style.fontSize = "11px";
-  badge.style.fontWeight = "600";
-  badge.style.letterSpacing = "0.03em";
-  badge.style.padding = "2px 8px";
-  badge.style.borderRadius = "9999px";
-  badge.style.background = "rgba(0,0,0,0.25)";
-  badge.style.color = "var(--text-primary)";
-  badge.style.backdropFilter = "blur(6px)";
-  badge.style.webkitBackdropFilter = "blur(6px)";
-  badge.style.border = "1px solid var(--glass-border)";
-  badge.style.opacity = "0.8";
-  badge.style.zIndex = "40";
-  badge.style.pointerEvents = "none";
 }
 
 // modules
@@ -130,6 +113,7 @@ visualizer?.start?.();
 
 // init load
 playlist.reloadFromPersist();
+refreshListSelect();
 renderPlaylist();
 player.updateControls();
 updateFileUIState();
@@ -138,10 +122,11 @@ updateVizIcons();
 updateRepeatIcons();
 updateShuffleUi();
 updatePlaybackRateUi();
+updateNormalizeUi();
+updateEqUi();
 drawWaveformForCurrent();
-injectVersionBadge();
 
-// metadata update event (artwork, duration, wave)
+// metadata update event
 window.addEventListener("playlist:metadata", (e)=>{
   const idx=e.detail?.index;
   renderPlaylist();
@@ -149,6 +134,23 @@ window.addEventListener("playlist:metadata", (e)=>{
     updateMainUI(idx);
     drawWaveformForCurrent();
   }
+});
+
+// ---------- play error toast ----------
+let playErrorCooldown=false;
+player.on("playerror", ({error, tag})=>{
+  console.warn("[playerror]", tag, error);
+  if (playErrorCooldown) return;
+  playErrorCooldown=true;
+
+  const name = error?.name || "";
+  if (name==="NotAllowedError"){
+    showToast("再生の許可が必要です。画面をタップしてから再生してね", true);
+  }else{
+    showToast("再生に失敗しました。別の曲で試してみてね", true);
+  }
+
+  setTimeout(()=>playErrorCooldown=false, 1500);
 });
 
 // file handlers
@@ -235,7 +237,6 @@ ui.seekBackwardBtn?.addEventListener("click", ()=>player.seek(-10));
 ui.shuffleBtn?.addEventListener("click", ()=>{
   playlist.toggleShuffle();
   updateShuffleUi();
-  showToast(playlist.shuffle ? "シャッフルON" : "シャッフルOFF");
 });
 ui.repeatBtn?.addEventListener("click", ()=>{
   playlist.toggleRepeat();
@@ -291,7 +292,7 @@ ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   showToast("プレイリストをクリアしました");
 });
 
-// theme (3-mode cycle)
+// theme
 ui.themeToggleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("theme")||"normal";
   const next = cur==="normal" ? "light" : (cur==="light" ? "dark" : "normal");
@@ -313,6 +314,21 @@ ui.vizStyleBtn?.addEventListener("click", ()=>{
   const next=cur==="line" ? "bars" : (cur==="bars" ? "dots" : "line");
   settings.set("visualizerStyle", next);
   updateVizIcons();
+});
+
+// normalize / EQ
+ui.normalizeBtn?.addEventListener("click", ()=>{
+  const on = audioFx.toggleNormalize();
+  player.reapplyFx();
+  updateNormalizeUi();
+  showToast(on ? "Normalize ON" : "Normalize OFF");
+});
+
+ui.eqSelect?.addEventListener("change",(e)=>{
+  const name = e.target.value;
+  audioFx.setEqPreset(name);
+  updateEqUi();
+  showToast(`EQ: ${name}`);
 });
 
 // minimal mode
@@ -341,6 +357,120 @@ player.on("trackchange",(idx)=>{
 });
 player.on("time",({currentTime,duration})=>{
   updateProgress(currentTime,duration);
+});
+
+// ---------- ghost relink ----------
+let relinkTargetIndex=null;
+
+function promptRelink(index){
+  relinkTargetIndex=index;
+  ui.relinkInput?.click();
+  showToast("この曲のMP3を再選択して復活させてね");
+}
+
+ui.relinkInput?.addEventListener("change", async(e)=>{
+  const file = e.target.files?.[0];
+  e.target.value="";
+  if (relinkTargetIndex==null) return;
+
+  if (!file || !isMp3File(file)){
+    showToast("MP3ファイルを選択してね", true);
+    relinkTargetIndex=null;
+    return;
+  }
+
+  await playlist.relinkTrack(relinkTargetIndex, file, audioFx);
+
+  if (playlist.currentTrackIndex===relinkTargetIndex){
+    player.loadTrack(relinkTargetIndex, true);
+  }
+
+  renderPlaylist();
+  player.updateControls();
+  updateFileUIState();
+  showToast("曲を復活させたよ！");
+
+  relinkTargetIndex=null;
+});
+
+// ---------- list manager ----------
+function refreshListSelect(){
+  if (!ui.listSelect) return;
+  const names = persist.listNames();
+  const active = persist.getActiveName();
+
+  ui.listSelect.innerHTML="";
+  names.forEach(name=>{
+    const opt=document.createElement("option");
+    opt.value=name;
+    opt.textContent=name;
+    ui.listSelect.appendChild(opt);
+  });
+  ui.listSelect.value = active;
+}
+
+ui.listSelect?.addEventListener("change",(e)=>{
+  const name = e.target.value;
+  player.stop();
+  persist.setActiveName(name);
+  playlist.tracks=[];
+  playlist.currentTrackIndex=-1;
+  playlist.reloadFromPersist();
+
+  renderPlaylist();
+  player.updateControls();
+  updateFileUIState();
+  resetPlayerUI();
+  showToast(`リスト切替: ${name}`);
+});
+
+ui.listNewBtn?.addEventListener("click", ()=>{
+  const name = prompt("新しいプレイリスト名を入力してね");
+  if (!name) return;
+
+  const names = persist.listNames();
+  if (names.includes(name)){
+    showToast("同じ名前のリストがあるよ", true);
+    return;
+  }
+
+  persist.createList(name);
+  persist.setActiveName(name);
+  playlist.tracks=[];
+  playlist.currentTrackIndex=-1;
+  playlist.save();
+
+  refreshListSelect();
+  renderPlaylist();
+  player.updateControls();
+  updateFileUIState();
+  resetPlayerUI();
+
+  showToast(`リスト「${name}」を作成`);
+});
+
+ui.listDelBtn?.addEventListener("click", ()=>{
+  const active = persist.getActiveName();
+  if (active==="default"){
+    showToast("defaultは削除できないよ", true);
+    return;
+  }
+  if (!confirm(`「${active}」を削除する？`)) return;
+
+  persist.deleteList(active);
+
+  player.stop();
+  playlist.tracks=[];
+  playlist.currentTrackIndex=-1;
+  playlist.reloadFromPersist();
+
+  refreshListSelect();
+  renderPlaylist();
+  player.updateControls();
+  updateFileUIState();
+  resetPlayerUI();
+
+  showToast("リストを削除したよ");
 });
 
 // ---------------- UI helpers ----------------
@@ -446,8 +576,18 @@ function updateThemeIcons(){
 }
 function updateVizIcons(){
   const style=settings.get("visualizerStyle")||"line";
-  ui.vizLineIcon.classList.toggle("hidden", style!=="line");
-  ui.vizBarsIcon.classList.toggle("hidden", style!=="bars");
+  const isBars = style==="bars";
+  ui.vizLineIcon.classList.toggle("hidden", isBars);
+  ui.vizBarsIcon.classList.toggle("hidden", !isBars);
+}
+function updateNormalizeUi(){
+  const on = !!settings.get("normalizeOn");
+  ui.normalizeBtn.classList.toggle("btn-active", on);
+  ui.normalizeBtn.textContent = on ? "Normalize ON" : "Normalize OFF";
+}
+function updateEqUi(){
+  const preset = settings.get("eqPreset") || "flat";
+  if (ui.eqSelect) ui.eqSelect.value = preset;
 }
 
 // ---------------- waveform seekbar bg ----------------
@@ -502,10 +642,10 @@ function renderPlaylist(){
 
     const li=document.createElement("li");
     li.className="playlist-item group flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative";
+    if (t.isGhost) li.classList.add("ghost");
     li.dataset.index=index;
     li.id=`track-${index}`;
 
-    // draggable
     li.draggable=true;
     li.addEventListener("dragstart", ()=>{ dragFromIndex=index; });
     li.addEventListener("dragover", (e)=>{ e.preventDefault(); });
@@ -552,6 +692,11 @@ function renderPlaylist(){
     li.appendChild(del);
 
     li.addEventListener("click", ()=>{
+      const curTrack = playlist.tracks[index];
+      if (curTrack.isGhost || !curTrack.file){
+        promptRelink(index);
+        return;
+      }
       playlist.currentTrackIndex=index;
       player.loadTrack(index,true);
       updateMainUI(index);

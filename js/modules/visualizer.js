@@ -10,6 +10,20 @@ export class Visualizer {
     this.data = null;
     this.FFT = 512;
     this.ready = false;
+
+    this.connected = new WeakSet();
+  }
+
+  _connectNewBundles(){
+    const bundles = this.audioFx?.getBundles?.() || [];
+    for (const b of bundles){
+      if (!b?.gain) continue;
+      if (this.connected.has(b.gain)) continue;
+      try{
+        b.gain.connect(this.analyser);
+        this.connected.add(b.gain);
+      }catch{}
+    }
   }
 
   _ensureAnalyser(){
@@ -21,10 +35,7 @@ export class Visualizer {
     this.analyser.smoothingTimeConstant = 0.85;
     this.data = new Uint8Array(this.analyser.frequencyBinCount);
 
-    // mix both bundles → visual analyser
-    this.audioFx.getBundles().forEach(b => {
-      try{ b.gain.connect(this.analyser); }catch{}
-    });
+    this._connectNewBundles();
 
     this._resize();
     window.addEventListener("resize", () => this._resize());
@@ -44,6 +55,8 @@ export class Visualizer {
     const loop = () => {
       requestAnimationFrame(loop);
       if (!this.ready) return;
+
+      this._connectNewBundles();
 
       const { width, height } = this.canvas.getBoundingClientRect();
       this.ctx2d.clearRect(0,0,width,height);

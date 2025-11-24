@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MP3 Player v4.0.0-beta</title>
+  <title>MP3 Player v4.2.0</title>
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS (dev / CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- Google Fonts: Inter -->
@@ -71,6 +71,9 @@
           フォルダを選択(PC)
         </label>
         <input type="file" id="folder-input" accept="audio/mpeg,.mp3" class="hidden" multiple webkitdirectory directory>
+
+        <!-- ghost relink input -->
+        <input type="file" id="relink-input" accept="audio/mpeg,.mp3" class="hidden">
       </div>
 
       <div id="minimal-play-btn-overlay"
@@ -224,11 +227,15 @@
           class="w-full h-2 bg-transparent appearance-none cursor-pointer">
       </div>
     </div>
+
+    <!-- version label -->
+    <div id="version-label"
+      class="absolute bottom-2 right-3 text-[10px] opacity-70 font-mono select-none"></div>
   </div>
 
   <!-- playlist panel -->
   <div id="playlist-panel">
-    <div class="flex justify-between items-center border-b pb-4 mb-4" style="border-color: rgba(255,255,255,0.3);">
+    <div class="flex justify-between items-center border-b pb-4 mb-3" style="border-color: rgba(255,255,255,0.3);">
       <h2 class="text-2xl font-bold">プレイリスト</h2>
       <button id="playlist-close-btn" class="control-btn p-1">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
@@ -238,7 +245,16 @@
       </button>
     </div>
 
-    <div class="flex items-center justify-around space-x-4 mb-4 p-2 rounded-lg"
+    <!-- list manager -->
+    <div id="list-manager" class="flex items-center gap-2 mb-3">
+      <select id="list-select" class="flex-1 p-2 rounded-lg text-sm border">
+        <option>default</option>
+      </select>
+      <button id="list-new-btn" class="control-btn px-3 py-2 rounded-lg text-sm font-bold" title="新規リスト作成">＋</button>
+      <button id="list-del-btn" class="control-btn px-3 py-2 rounded-lg text-sm font-bold" title="リスト削除">－</button>
+    </div>
+
+    <div class="flex items-center justify-around space-x-4 mb-3 p-2 rounded-lg"
       style="background-color: rgba(0,0,0,0.2);">
       <button id="theme-toggle-btn" class="control-btn p-2" title="テーマ切り替え">
         <svg id="theme-sun-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none"
@@ -275,12 +291,29 @@
       </button>
     </div>
 
-    <div class="mb-4">
+    <!-- audioFx row -->
+    <div id="audiofx-row" class="flex items-center gap-2 mb-3 p-2 rounded-lg"
+      style="background-color: rgba(0,0,0,0.2);">
+      <button id="normalize-btn"
+        class="control-btn px-2 py-1 text-xs font-semibold rounded-md"
+        title="音量ノーマライズ">
+        Normalize OFF
+      </button>
+
+      <select id="eq-select" class="flex-1 p-2 rounded-lg text-sm border">
+        <option value="flat">EQ: Flat</option>
+        <option value="bass">EQ: Bass</option>
+        <option value="treble">EQ: Treble</option>
+        <option value="vocal">EQ: Vocal</option>
+      </select>
+    </div>
+
+    <div class="mb-3">
       <input type="search" id="playlist-search" class="w-full p-2 rounded-lg border text-sm"
         placeholder="プレイリストを検索...">
     </div>
 
-    <ul id="playlist-ul" class="space-y-3 overflow-y-auto" style="height: calc(100% - 13rem);">
+    <ul id="playlist-ul" class="space-y-3 overflow-y-auto" style="height: calc(100% - 17rem);">
       <li class="placeholder text-center pt-10">曲をドロップしてください</li>
     </ul>
   </div>

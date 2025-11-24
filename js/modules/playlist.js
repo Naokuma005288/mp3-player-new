@@ -28,6 +28,7 @@ export class Playlist {
         wavePeaks: t.wavePeaks || null,
         isGhost: true
       }));
+      this.currentTrackIndex = -1;
     }
   }
 
@@ -103,14 +104,12 @@ export class Playlist {
     this.save();
   }
 
-  // ✅ reorder (drag & drop)
   reorder(from, to){
     if (from===to) return;
     if (from<0 || to<0 || from>=this.tracks.length || to>=this.tracks.length) return;
     const [moved] = this.tracks.splice(from,1);
     this.tracks.splice(to,0,moved);
 
-    // currentTrackIndex 補正
     if (this.currentTrackIndex === from) this.currentTrackIndex = to;
     else {
       if (from < this.currentTrackIndex && to >= this.currentTrackIndex) this.currentTrackIndex--;
@@ -119,13 +118,43 @@ export class Playlist {
     this.save();
   }
 
-  // -----------------------
-  // addFiles (no-crash)
-  // -----------------------
+  async relinkTrack(index, file, audioFx){
+    const t = this.tracks[index];
+    if (!t || !file) return;
+
+    t.file = file;
+    t.isGhost = false;
+    t.title = file.name;
+    t.artist = "ロード中...";
+    t.artwork = null;
+    t.duration = 0;
+
+    t.gain = await (audioFx?.analyzeAndGetGain?.(file) ?? 1);
+    t.wavePeaks = await (audioFx?.extractWavePeaks?.(file) ?? null);
+
+    this._readMetadata(file, index);
+    this._readDuration(file, index);
+
+    this.save();
+    this._emitMetadata(index);
+  }
+
   async addFiles(files, audioFx){
     const mp3s = Array.from(files).filter(isMp3File);
 
     for (const file of mp3s){
+      // auto revive ghost by title or filename
+      const ghostIndex = this.tracks.findIndex(t =>
+        t.isGhost && (
+          (t.title||"") === file.name ||
+          (t.title||"") + ".mp3" === file.name
+        )
+      );
+      if (ghostIndex !== -1){
+        await this.relinkTrack(ghostIndex, file, audioFx);
+        continue;
+      }
+
       const track = {
         file,
         title: file.name,
@@ -153,7 +182,6 @@ export class Playlist {
     window.dispatchEvent(new CustomEvent("playlist:metadata", { detail:{ index } }));
   }
 
-  // ✅ Artwork確実化：jsmediatags → 無い/失敗 → APIC直読み fallback
   async _readMetadata(file, index){
     const jsmediatags = window.jsmediatags;
     if (!jsmediatags){
@@ -165,7 +193,7 @@ export class Playlist {
 
     let done = false;
 
-    const finish = async (tags=null, error=false) => {
+    const finish = async (tags=null) => {
       if (done) return;
       done = true;
 
@@ -182,7 +210,6 @@ export class Playlist {
         artworkUrl = `data:${format};base64,${btoa(base64)}`;
       }
 
-      // fallback if no artwork
       if (!artworkUrl){
         artworkUrl = await this._extractArtworkFallback(file);
       }
@@ -197,11 +224,10 @@ export class Playlist {
 
     jsmediatags.read(file, {
       onSuccess: (tag) => finish(tag.tags || {}),
-      onError: () => finish(null, true)
+      onError: () => finish(null)
     });
 
-    // safety timeout (rare hang)
-    setTimeout(() => finish(null, true), 2500);
+    setTimeout(() => finish(null), 2500);
   }
 
   _readDuration(file, index){
@@ -222,19 +248,14 @@ export class Playlist {
     }, { once:true });
   }
 
-  // -----------------------
-  // APIC fallback parser
-  // (small but reliable)
-  // -----------------------
   async _extractArtworkFallback(file){
     try{
       const buf = await file.slice(0, 1024*1024).arrayBuffer();
       const bytes = new Uint8Array(buf);
 
-      // ID3 header?
       if (bytes[0]!==0x49 || bytes[1]!==0x44 || bytes[2]!==0x33) return null;
 
-      let pos = 10; // skip header
+      let pos = 10;
       const size =
         (bytes[6]&0x7f)<<21 |
         (bytes[7]&0x7f)<<14 |
@@ -253,13 +274,12 @@ export class Playlist {
           const frame = bytes.slice(pos+10, pos+10+frameSize);
           let i=0;
 
-          const encoding = frame[i++]; // ignore
+          const encoding = frame[i++];
           let mime="";
           while (frame[i]!==0){ mime += String.fromCharCode(frame[i++]); }
-          i++; // null
-          i++; // pictureType
+          i++;
+          i++;
 
-          // description (null-terminated)
           if (encoding===0 || encoding===3){
             while (frame[i]!==0) i++;
             i++;

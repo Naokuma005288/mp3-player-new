@@ -1,5 +1,5 @@
 // js/modules/playerCore.js
-import { clamp, easeInOutCos } from "./utils.js";
+import { clamp } from "./utils.js";
 
 export class PlayerCore {
   constructor(ui, playlist, settings, audioFx) {
@@ -14,12 +14,11 @@ export class PlayerCore {
     this.audioA = ui.audioA;
     this.audioB = ui.audioB;
 
-    // attach A/B bundles (fail-safe)
     try {
       this.bundleA = audioFx.attach(this.audioA);
       this.bundleB = audioFx.attach(this.audioB);
     } catch (e) {
-      console.warn("[AudioFx.attach] failed, fallback plain audio", e);
+      console.warn("[AudioFx.attach] failed, fallback to plain audio", e);
       this.bundleA = { gain: null };
       this.bundleB = { gain: null };
     }
@@ -42,6 +41,19 @@ export class PlayerCore {
     (this.events.get(name) || []).forEach(fn => fn(payload));
   }
 
+  _safePlay(audio, tag="play"){
+    try{
+      const p = audio.play();
+      if (p && typeof p.catch === "function"){
+        p.catch(err => this.emit("playerror", { error: err, tag }));
+      }
+      return p;
+    }catch(err){
+      this.emit("playerror", { error: err, tag });
+      return null;
+    }
+  }
+
   _bindAudioEvents(audio) {
     audio.addEventListener("play", () => this.emit("playstate", false));
     audio.addEventListener("pause", () => this.emit("playstate", true));
@@ -56,10 +68,9 @@ export class PlayerCore {
 
     audio.addEventListener("ended", () => {
       if (!this.isActive(audio)) return;
-
       if (this.playlist.repeatMode === "one") {
         audio.currentTime = 0;
-        audio.play().catch(() => {});
+        this._safePlay(audio, "repeat-one");
       } else {
         this.playNext();
       }
@@ -85,16 +96,11 @@ export class PlayerCore {
   updateControls() {
     const disabled = this.playlist.tracks.length === 0;
     const controls = [
-      this.ui.playPauseBtn,
-      this.ui.progressBar,
-      this.ui.prevBtn,
-      this.ui.nextBtn,
-      this.ui.shuffleBtn,
-      this.ui.repeatBtn,
-      this.ui.seekForwardBtn,
-      this.ui.seekBackwardBtn,
-      this.ui.playlistToggleBtn,
-      this.ui.playbackRateBtn,
+      this.ui.playPauseBtn, this.ui.progressBar,
+      this.ui.prevBtn, this.ui.nextBtn,
+      this.ui.shuffleBtn, this.ui.repeatBtn,
+      this.ui.seekForwardBtn, this.ui.seekBackwardBtn,
+      this.ui.playlistToggleBtn, this.ui.playbackRateBtn
     ];
     controls.forEach(el => { if (el) el.disabled = disabled; });
 
@@ -141,11 +147,17 @@ export class PlayerCore {
   }
 
   _setSource(audio, track) {
+    if (audio.__objectUrl){
+      try{ URL.revokeObjectURL(audio.__objectUrl); }catch{}
+      audio.__objectUrl = null;
+    }
+
     if (!track.file) {
       audio.src = "";
       return;
     }
     const url = URL.createObjectURL(track.file);
+    audio.__objectUrl = url;
     audio.src = url;
     audio.playbackRate = this.playbackRates[this.currentRateIndex];
   }
@@ -159,6 +171,13 @@ export class PlayerCore {
     this.audioFx.applyEqPresetToAll?.();
   }
 
+  reapplyFx(){
+    const idx = this.playlist.currentTrackIndex;
+    const t = this.playlist.tracks[idx];
+    if (!t) return;
+    this._applyTrackFx(t);
+  }
+
   _switchTo(track, autoplay) {
     const a = this.getActiveAudio();
     a.pause();
@@ -169,10 +188,7 @@ export class PlayerCore {
     this.playlist.currentTrackIndex = this.playlist.tracks.indexOf(track);
     this.emit("trackchange", this.playlist.currentTrackIndex);
 
-    if (autoplay) {
-      const p = a.play();
-      if (p) p.catch(()=>{});
-    }
+    if (autoplay) this._safePlay(a, "switch");
   }
 
   _crossfadeTo(track, sec = 2, autoplay = true) {
@@ -195,13 +211,13 @@ export class PlayerCore {
       return;
     }
 
-    nextA.play().catch(()=>{});
+    this._safePlay(nextA, "crossfade-next");
 
     const start = performance.now();
     const durMs = Math.max(0.05, sec) * 1000;
 
     const fade = (now) => {
-      const t = easeInOutCos((now - start) / durMs);
+      const t = clamp((now - start) / durMs, 0, 1);
       if (curBundle?.gain) curBundle.gain.gain.value = 1 - t;
       if (nextBundle?.gain) nextBundle.gain.gain.value = t;
 
@@ -223,13 +239,19 @@ export class PlayerCore {
     this.audioFx?.resumeContext?.();
 
     const a = this.getActiveAudio();
-    if (a.paused) a.play().catch(()=>{});
+    if (a.paused) this._safePlay(a, "toggle");
     else a.pause();
   }
 
   stop() {
-    this.audioA.pause(); this.audioB.pause();
-    this.audioA.src=""; this.audioB.src="";
+    [this.audioA, this.audioB].forEach(a=>{
+      a.pause();
+      if (a.__objectUrl){
+        try{ URL.revokeObjectURL(a.__objectUrl); }catch{}
+        a.__objectUrl=null;
+      }
+      a.src="";
+    });
     this.playlist.currentTrackIndex = -1;
     this.emit("trackchange", -1);
   }
@@ -238,38 +260,18 @@ export class PlayerCore {
     const len = this.playlist.tracks.length;
     if (len === 0) return;
 
-    let nextIndex = -1;
+    let idx = this.playlist.currentTrackIndex;
+    if (idx === -1) idx = 0;
+    idx++;
 
-    if (this.playlist.shuffle) {
-      // ✅シャッフル：現在と違う曲をランダム（playableのみ）
-      const playable = this.playlist.tracks
-        .map((t,i)=>t?.file?i:-1)
-        .filter(i=>i!==-1);
-
-      if (!playable.length) return;
-
-      if (playable.length === 1) nextIndex = playable[0];
-      else {
-        do {
-          nextIndex = playable[Math.floor(Math.random()*playable.length)];
-        } while (nextIndex === this.playlist.currentTrackIndex);
-      }
-    } else {
-      // 通常順送り
-      let idx = this.playlist.currentTrackIndex;
-      if (idx === -1) idx = 0;
-      idx++;
-
-      if (idx >= len) {
-        if (this.playlist.repeatMode === "all") idx = 0;
-        else return;
-      }
-
-      nextIndex = this._resolvePlayableIndex(idx, 1);
+    if (idx >= len) {
+      if (this.playlist.repeatMode === "all") idx = 0;
+      else return;
     }
 
-    if (nextIndex === -1) return;
-    this.loadTrack(nextIndex, true);
+    const playable = this._resolvePlayableIndex(idx, 1);
+    if (playable === -1) return;
+    this.loadTrack(playable, true);
   }
 
   playPrev() {
@@ -281,25 +283,6 @@ export class PlayerCore {
 
     let idx = this.playlist.currentTrackIndex;
     if (idx === -1) idx = 0;
-
-    if (this.playlist.shuffle) {
-      // shuffle時は「前」もランダムでOK
-      const playable = this.playlist.tracks
-        .map((t,i)=>t?.file?i:-1)
-        .filter(i=>i!==-1);
-
-      if (!playable.length) return;
-
-      let prevIndex = playable[Math.floor(Math.random()*playable.length)];
-      if (playable.length > 1){
-        while (prevIndex === this.playlist.currentTrackIndex){
-          prevIndex = playable[Math.floor(Math.random()*playable.length)];
-        }
-      }
-      this.loadTrack(prevIndex, true);
-      return;
-    }
-
     idx--;
 
     if (idx < 0) {
@@ -317,12 +300,6 @@ export class PlayerCore {
     if (a.readyState >= 2) {
       a.currentTime = clamp(a.currentTime + sec, 0, a.duration || 0);
     }
-  }
-
-  previewSeek(percent) {
-    const a = this.getActiveAudio();
-    if (!a.duration) return 0;
-    return a.duration * (percent / 100);
   }
 
   commitSeek(percent) {

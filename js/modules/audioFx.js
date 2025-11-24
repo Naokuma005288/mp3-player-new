@@ -8,7 +8,6 @@ export default class AudioFx {
     this.ctx = null;
     this.bundles = new Map(); // audioEl -> bundle
 
-    // EQ presets
     this.eqPresets = {
       flat:   { low:0, mid:0, high:0 },
       bass:   { low:6, mid:0, high:-2 },
@@ -30,7 +29,6 @@ export default class AudioFx {
     }
   }
 
-  // ✅ A/B 同時 attach できる構造に刷新（多重detach無し）
   attach(audioEl){
     if (!audioEl) return null;
     const ctx = this.ensureContext();
@@ -40,7 +38,6 @@ export default class AudioFx {
     if (!audioEl.__mediaSource){
       audioEl.__mediaSource = ctx.createMediaElementSource(audioEl);
     }
-
     const source = audioEl.__mediaSource;
 
     const analyser = ctx.createAnalyser();
@@ -59,7 +56,6 @@ export default class AudioFx {
     const gain = ctx.createGain();
     gain.gain.value = (this.settings.get("volume") ?? 1);
 
-    // chain
     source.connect(analyser);
     analyser.connect(low);
     low.connect(mid);
@@ -69,10 +65,7 @@ export default class AudioFx {
 
     const bundle = { audioEl, source, analyser, low, mid, high, gain };
     this.bundles.set(audioEl, bundle);
-
-    // apply EQ preset now
     this.applyEqPresetToBundle(bundle);
-
     return bundle;
   }
 
@@ -102,6 +95,7 @@ export default class AudioFx {
   getBundles(){
     return [...this.bundles.values()];
   }
+
   get nodes(){
     return this.getBundles();
   }
@@ -110,9 +104,6 @@ export default class AudioFx {
     return this.bundles.get(audioEl)?.analyser || null;
   }
 
-  // -------------------------
-  // Normalize / EQ
-  // -------------------------
   applyNormalizeToCurrent(gainNode, trackGain=1){
     const on = !!this.settings.get("normalizeOn");
     if (!gainNode) return;
@@ -139,13 +130,9 @@ export default class AudioFx {
   }
 
   toggleNormalize(){
-    const v = this.settings.toggle("normalizeOn");
-    return v;
+    return this.settings.toggle("normalizeOn");
   }
 
-  // -------------------------
-  // Analysis (v4 beta)
-  // -------------------------
   async analyzeAndGetGain(file){
     try{
       const ctx = this.ensureContext();
@@ -158,9 +145,8 @@ export default class AudioFx {
         sumSq += v*v;
       }
       const rms = Math.sqrt(sumSq / ch0.length) || 0.0001;
-      const targetRms = 0.12; // ざっくり -14LUFS 付近
-      const gain = clamp(targetRms / rms, 0.25, 4);
-      return gain;
+      const targetRms = 0.12;
+      return clamp(targetRms / rms, 0.25, 4);
     }catch{
       return 1;
     }
@@ -187,7 +173,6 @@ export default class AudioFx {
         peaks[i] = peak;
       }
 
-      // normalize 0..1
       const max = Math.max(...peaks, 0.0001);
       return peaks.map(p => p/max);
     }catch{
