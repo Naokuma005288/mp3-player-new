@@ -22,13 +22,15 @@ export class Playlist {
         file: null,
         title: t.title || "Ghost Track",
         artist: t.artist || "Unknown",
+        album: t.album || "",
+        year: t.year || "",
+        genre: t.genre || "",
         artwork: t.artwork || null,
         duration: t.duration || 0,
         gain: t.gain || 1,
         wavePeaks: t.wavePeaks || null,
         isGhost: true
       }));
-      this.currentTrackIndex = -1;
     }
   }
 
@@ -36,6 +38,9 @@ export class Playlist {
     const slim = this.tracks.map(t => ({
       title: t.title,
       artist: t.artist,
+      album: t.album,
+      year: t.year,
+      genre: t.genre,
       artwork: t.artwork,
       duration: t.duration,
       gain: t.gain,
@@ -56,7 +61,9 @@ export class Playlist {
       .map((t,i)=>({t,i}))
       .filter(({t}) =>
         (t.title||"").toLowerCase().includes(q) ||
-        (t.artist||"").toLowerCase().includes(q)
+        (t.artist||"").toLowerCase().includes(q) ||
+        (t.album||"").toLowerCase().includes(q) ||
+        (t.genre||"").toLowerCase().includes(q)
       )
       .map(({i})=>i);
   }
@@ -118,47 +125,17 @@ export class Playlist {
     this.save();
   }
 
-  async relinkTrack(index, file, audioFx){
-    const t = this.tracks[index];
-    if (!t || !file) return;
-
-    t.file = file;
-    t.isGhost = false;
-    t.title = file.name;
-    t.artist = "ロード中...";
-    t.artwork = null;
-    t.duration = 0;
-
-    t.gain = await (audioFx?.analyzeAndGetGain?.(file) ?? 1);
-    t.wavePeaks = await (audioFx?.extractWavePeaks?.(file) ?? null);
-
-    this._readMetadata(file, index);
-    this._readDuration(file, index);
-
-    this.save();
-    this._emitMetadata(index);
-  }
-
   async addFiles(files, audioFx){
     const mp3s = Array.from(files).filter(isMp3File);
 
     for (const file of mp3s){
-      // auto revive ghost by title or filename
-      const ghostIndex = this.tracks.findIndex(t =>
-        t.isGhost && (
-          (t.title||"") === file.name ||
-          (t.title||"") + ".mp3" === file.name
-        )
-      );
-      if (ghostIndex !== -1){
-        await this.relinkTrack(ghostIndex, file, audioFx);
-        continue;
-      }
-
       const track = {
         file,
         title: file.name,
         artist: "ロード中...",
+        album: "",
+        year: "",
+        genre: "",
         artwork: null,
         duration: 0,
         gain: 1,
@@ -191,112 +168,110 @@ export class Playlist {
       return;
     }
 
-    let done = false;
+    let done=false;
 
     const finish = async (tags=null) => {
       if (done) return;
-      done = true;
-
+      done=true;
       if (!this.tracks[index]) return;
 
-      const title = tags?.title || file.name;
+      const title  = tags?.title  || file.name;
       const artist = tags?.artist || "不明なアーティスト";
+      const album  = tags?.album  || "";
+      const year   = tags?.year   || tags?.date || "";
+      const genre  = tags?.genre  || "";
 
-      let artworkUrl = null;
+      let artworkUrl=null;
       if (tags?.picture){
         const { data, format } = tags.picture;
         let base64="";
         for (let i=0;i<data.length;i++) base64 += String.fromCharCode(data[i]);
         artworkUrl = `data:${format};base64,${btoa(base64)}`;
       }
-
       if (!artworkUrl){
         artworkUrl = await this._extractArtworkFallback(file);
       }
 
-      this.tracks[index].title = title;
-      this.tracks[index].artist = artist;
-      this.tracks[index].artwork = artworkUrl;
+      const t=this.tracks[index];
+      t.title=title;
+      t.artist=artist;
+      t.album=album;
+      t.year=year;
+      t.genre=genre;
+      t.artwork=artworkUrl;
 
       this.save();
       this._emitMetadata(index);
     };
 
-    jsmediatags.read(file, {
-      onSuccess: (tag) => finish(tag.tags || {}),
-      onError: () => finish(null)
+    jsmediatags.read(file,{
+      onSuccess:(tag)=>finish(tag.tags||{}),
+      onError:()=>finish(null)
     });
-
-    setTimeout(() => finish(null), 2500);
+    setTimeout(()=>finish(null),2500);
   }
 
   _readDuration(file, index){
-    const temp = new Audio();
-    const url = URL.createObjectURL(file);
-    temp.src = url;
+    const temp=new Audio();
+    const url=URL.createObjectURL(file);
+    temp.src=url;
 
-    temp.addEventListener("loadedmetadata", () => {
+    temp.addEventListener("loadedmetadata",()=>{
       if (!this.tracks[index]) return;
-      this.tracks[index].duration = temp.duration || 0;
+      this.tracks[index].duration=temp.duration||0;
       URL.revokeObjectURL(url);
       this.save();
       this._emitMetadata(index);
-    }, { once:true });
+    },{once:true});
 
-    temp.addEventListener("error", () => {
-      URL.revokeObjectURL(url);
-    }, { once:true });
+    temp.addEventListener("error",()=>URL.revokeObjectURL(url),{once:true});
   }
 
   async _extractArtworkFallback(file){
     try{
-      const buf = await file.slice(0, 1024*1024).arrayBuffer();
-      const bytes = new Uint8Array(buf);
+      const buf=await file.slice(0,1024*1024).arrayBuffer();
+      const bytes=new Uint8Array(buf);
 
-      if (bytes[0]!==0x49 || bytes[1]!==0x44 || bytes[2]!==0x33) return null;
+      if (bytes[0]!==0x49||bytes[1]!==0x44||bytes[2]!==0x33) return null;
 
-      let pos = 10;
-      const size =
-        (bytes[6]&0x7f)<<21 |
-        (bytes[7]&0x7f)<<14 |
-        (bytes[8]&0x7f)<<7  |
+      let pos=10;
+      const size=
+        (bytes[6]&0x7f)<<21|
+        (bytes[7]&0x7f)<<14|
+        (bytes[8]&0x7f)<<7 |
         (bytes[9]&0x7f);
+      const end=pos+size;
 
-      const end = pos + size;
-
-      while (pos + 10 < end){
-        const id = String.fromCharCode(bytes[pos],bytes[pos+1],bytes[pos+2],bytes[pos+3]);
-        const frameSize =
+      while(pos+10<end){
+        const id=String.fromCharCode(bytes[pos],bytes[pos+1],bytes[pos+2],bytes[pos+3]);
+        const frameSize=
           (bytes[pos+4]<<24)|(bytes[pos+5]<<16)|(bytes[pos+6]<<8)|bytes[pos+7];
-        if (!id.trim() || frameSize<=0) break;
+        if (!id.trim()||frameSize<=0) break;
 
         if (id==="APIC"){
-          const frame = bytes.slice(pos+10, pos+10+frameSize);
+          const frame=bytes.slice(pos+10,pos+10+frameSize);
           let i=0;
-
-          const encoding = frame[i++];
+          const encoding=frame[i++];
           let mime="";
-          while (frame[i]!==0){ mime += String.fromCharCode(frame[i++]); }
-          i++;
-          i++;
+          while(frame[i]!==0){ mime += String.fromCharCode(frame[i++]); }
+          i++; i++;
 
-          if (encoding===0 || encoding===3){
-            while (frame[i]!==0) i++;
+          if (encoding===0||encoding===3){
+            while(frame[i]!==0) i++;
             i++;
           }else{
-            while (!(frame[i]===0 && frame[i+1]===0)) i++;
+            while(!(frame[i]===0&&frame[i+1]===0)) i++;
             i+=2;
           }
 
-          const imgData = frame.slice(i);
-          const b64 = btoa(String.fromCharCode(...imgData));
-          const fmt = mime || "image/jpeg";
+          const imgData=frame.slice(i);
+          const b64=btoa(String.fromCharCode(...imgData));
+          const fmt=mime||"image/jpeg";
           return `data:${fmt};base64,${b64}`;
         }
 
         pos += 10 + frameSize;
       }
-
       return null;
     }catch{
       return null;

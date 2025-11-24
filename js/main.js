@@ -1,4 +1,4 @@
-// js/main.js v4.2.0 full
+// js/main.js v4.3.0 full
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -7,7 +7,7 @@ import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
 import { formatTime, isMp3File } from "./modules/utils.js";
 
-const APP_VERSION = "4.2.0";
+const APP_VERSION = "v4.3.0";
 
 // UI
 const ui = {
@@ -16,8 +16,6 @@ const ui = {
 
   fileInput: document.getElementById("file-input"),
   folderInput: document.getElementById("folder-input"),
-  relinkInput: document.getElementById("relink-input"),
-
   dropZone: document.getElementById("drop-zone"),
   albumArt: document.getElementById("album-art"),
   progressBar: document.getElementById("progress-bar"),
@@ -34,6 +32,8 @@ const ui = {
   durationDisplay: document.getElementById("duration-display"),
   songTitle: document.getElementById("song-title"),
   songArtist: document.getElementById("song-artist"),
+  songAlbum: document.getElementById("song-album"),
+
   playerContainer: document.getElementById("player-container"),
   fileSelectUI: document.getElementById("file-select-ui"),
 
@@ -69,23 +69,30 @@ const ui = {
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
 
-  normalizeBtn: document.getElementById("normalize-btn"),
-  eqSelect: document.getElementById("eq-select"),
-
-  listSelect: document.getElementById("list-select"),
-  listNewBtn: document.getElementById("list-new-btn"),
-  listDelBtn: document.getElementById("list-del-btn"),
-
   visualizerCanvas: document.getElementById("visualizer-canvas"),
 
   toast: document.getElementById("toast"),
   toastMessage: document.getElementById("toast-message"),
 
+  splash: document.getElementById("splash-screen"),
+  splashVersion: document.getElementById("splash-version"),
   versionLabel: document.getElementById("version-label"),
 };
 
-// version label
-if (ui.versionLabel) ui.versionLabel.textContent = `v${APP_VERSION}`;
+// --- Splash control ---
+const splashStart = performance.now();
+if (ui.splashVersion) ui.splashVersion.textContent = APP_VERSION;
+if (ui.versionLabel) ui.versionLabel.textContent = APP_VERSION;
+
+function hideSplash(){
+  const minMs = 500;
+  const elapsed = performance.now() - splashStart;
+  const wait = Math.max(0, minMs - elapsed);
+  setTimeout(()=>{
+    ui.splash?.classList.add("hide");
+    ui.splash?.setAttribute("aria-hidden","true");
+  }, wait);
+}
 
 // toast
 let toastTimer=null;
@@ -112,19 +119,20 @@ const visualizer = ui.visualizerCanvas
 visualizer?.start?.();
 
 // init load
-playlist.reloadFromPersist();
-refreshListSelect();
-renderPlaylist();
-player.updateControls();
-updateFileUIState();
-updateThemeIcons();
-updateVizIcons();
-updateRepeatIcons();
-updateShuffleUi();
-updatePlaybackRateUi();
-updateNormalizeUi();
-updateEqUi();
-drawWaveformForCurrent();
+try{
+  playlist.reloadFromPersist();
+  renderPlaylist();
+  player.updateControls();
+  updateFileUIState();
+  updateThemeIcons();
+  updateVizIcons();
+  updateRepeatIcons();
+  updateShuffleUi();
+  updatePlaybackRateUi();
+  drawWaveformForCurrent();
+} finally {
+  hideSplash();
+}
 
 // metadata update event
 window.addEventListener("playlist:metadata", (e)=>{
@@ -134,23 +142,6 @@ window.addEventListener("playlist:metadata", (e)=>{
     updateMainUI(idx);
     drawWaveformForCurrent();
   }
-});
-
-// ---------- play error toast ----------
-let playErrorCooldown=false;
-player.on("playerror", ({error, tag})=>{
-  console.warn("[playerror]", tag, error);
-  if (playErrorCooldown) return;
-  playErrorCooldown=true;
-
-  const name = error?.name || "";
-  if (name==="NotAllowedError"){
-    showToast("再生の許可が必要です。画面をタップしてから再生してね", true);
-  }else{
-    showToast("再生に失敗しました。別の曲で試してみてね", true);
-  }
-
-  setTimeout(()=>playErrorCooldown=false, 1500);
 });
 
 // file handlers
@@ -248,6 +239,7 @@ ui.playbackRateBtn?.addEventListener("click", ()=>{
   showToast(`再生速度 ${rate}x`);
 });
 
+// progress
 ui.progressBar?.addEventListener("input",(e)=>{
   const a=player.getActiveAudio();
   if (!a.duration) return;
@@ -259,6 +251,16 @@ ui.progressBar?.addEventListener("change",(e)=>{
   if (!a.duration) return;
   const p=parseFloat(e.target.value||"0");
   player.commitSeek(p);
+});
+
+// ✅ P0: waveform click to seek
+ui.waveCanvas?.addEventListener("click",(e)=>{
+  const a=player.getActiveAudio();
+  if (!a.duration) return;
+  const rect=ui.waveCanvas.getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  const pct=(x/rect.width)*100;
+  player.commitSeek(pct);
 });
 
 ui.volumeControl?.addEventListener("input",(e)=>{
@@ -285,6 +287,7 @@ ui.playlistSearch?.addEventListener("input",(e)=>{
 ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   player.stop();
   playlist.clearAll();
+  selectedIndices.clear();
   renderPlaylist();
   resetPlayerUI();
   player.updateControls();
@@ -292,7 +295,7 @@ ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   showToast("プレイリストをクリアしました");
 });
 
-// theme
+// theme (3-mode cycle)
 ui.themeToggleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("theme")||"normal";
   const next = cur==="normal" ? "light" : (cur==="light" ? "dark" : "normal");
@@ -314,21 +317,6 @@ ui.vizStyleBtn?.addEventListener("click", ()=>{
   const next=cur==="line" ? "bars" : (cur==="bars" ? "dots" : "line");
   settings.set("visualizerStyle", next);
   updateVizIcons();
-});
-
-// normalize / EQ
-ui.normalizeBtn?.addEventListener("click", ()=>{
-  const on = audioFx.toggleNormalize();
-  player.reapplyFx();
-  updateNormalizeUi();
-  showToast(on ? "Normalize ON" : "Normalize OFF");
-});
-
-ui.eqSelect?.addEventListener("change",(e)=>{
-  const name = e.target.value;
-  audioFx.setEqPreset(name);
-  updateEqUi();
-  showToast(`EQ: ${name}`);
 });
 
 // minimal mode
@@ -359,120 +347,6 @@ player.on("time",({currentTime,duration})=>{
   updateProgress(currentTime,duration);
 });
 
-// ---------- ghost relink ----------
-let relinkTargetIndex=null;
-
-function promptRelink(index){
-  relinkTargetIndex=index;
-  ui.relinkInput?.click();
-  showToast("この曲のMP3を再選択して復活させてね");
-}
-
-ui.relinkInput?.addEventListener("change", async(e)=>{
-  const file = e.target.files?.[0];
-  e.target.value="";
-  if (relinkTargetIndex==null) return;
-
-  if (!file || !isMp3File(file)){
-    showToast("MP3ファイルを選択してね", true);
-    relinkTargetIndex=null;
-    return;
-  }
-
-  await playlist.relinkTrack(relinkTargetIndex, file, audioFx);
-
-  if (playlist.currentTrackIndex===relinkTargetIndex){
-    player.loadTrack(relinkTargetIndex, true);
-  }
-
-  renderPlaylist();
-  player.updateControls();
-  updateFileUIState();
-  showToast("曲を復活させたよ！");
-
-  relinkTargetIndex=null;
-});
-
-// ---------- list manager ----------
-function refreshListSelect(){
-  if (!ui.listSelect) return;
-  const names = persist.listNames();
-  const active = persist.getActiveName();
-
-  ui.listSelect.innerHTML="";
-  names.forEach(name=>{
-    const opt=document.createElement("option");
-    opt.value=name;
-    opt.textContent=name;
-    ui.listSelect.appendChild(opt);
-  });
-  ui.listSelect.value = active;
-}
-
-ui.listSelect?.addEventListener("change",(e)=>{
-  const name = e.target.value;
-  player.stop();
-  persist.setActiveName(name);
-  playlist.tracks=[];
-  playlist.currentTrackIndex=-1;
-  playlist.reloadFromPersist();
-
-  renderPlaylist();
-  player.updateControls();
-  updateFileUIState();
-  resetPlayerUI();
-  showToast(`リスト切替: ${name}`);
-});
-
-ui.listNewBtn?.addEventListener("click", ()=>{
-  const name = prompt("新しいプレイリスト名を入力してね");
-  if (!name) return;
-
-  const names = persist.listNames();
-  if (names.includes(name)){
-    showToast("同じ名前のリストがあるよ", true);
-    return;
-  }
-
-  persist.createList(name);
-  persist.setActiveName(name);
-  playlist.tracks=[];
-  playlist.currentTrackIndex=-1;
-  playlist.save();
-
-  refreshListSelect();
-  renderPlaylist();
-  player.updateControls();
-  updateFileUIState();
-  resetPlayerUI();
-
-  showToast(`リスト「${name}」を作成`);
-});
-
-ui.listDelBtn?.addEventListener("click", ()=>{
-  const active = persist.getActiveName();
-  if (active==="default"){
-    showToast("defaultは削除できないよ", true);
-    return;
-  }
-  if (!confirm(`「${active}」を削除する？`)) return;
-
-  persist.deleteList(active);
-
-  player.stop();
-  playlist.tracks=[];
-  playlist.currentTrackIndex=-1;
-  playlist.reloadFromPersist();
-
-  refreshListSelect();
-  renderPlaylist();
-  player.updateControls();
-  updateFileUIState();
-  resetPlayerUI();
-
-  showToast("リストを削除したよ");
-});
-
 // ---------------- UI helpers ----------------
 function updateFileUIState(){
   ui.fileSelectUI?.classList.toggle("file-select-hidden", playlist.tracks.length>0);
@@ -496,12 +370,19 @@ function updateMainUI(index){
   if (index<0 || !playlist.tracks[index]){
     ui.songTitle.textContent="再生する曲はありません";
     ui.songArtist.textContent="ファイルをロードしてください";
+    if (ui.songAlbum) ui.songAlbum.textContent="";
     resetAlbumArt();
     return;
   }
   const t=playlist.tracks[index];
   ui.songTitle.textContent=t.title||"Unknown Title";
   ui.songArtist.textContent=t.artist||"Unknown Artist";
+
+  const parts=[];
+  if (t.album) parts.push(t.album);
+  if (t.year) parts.push(t.year);
+  if (t.genre) parts.push(t.genre);
+  if (ui.songAlbum) ui.songAlbum.textContent = parts.join(" / ");
 
   if (t.artwork){
     ui.albumArt.src=t.artwork;
@@ -576,18 +457,8 @@ function updateThemeIcons(){
 }
 function updateVizIcons(){
   const style=settings.get("visualizerStyle")||"line";
-  const isBars = style==="bars";
-  ui.vizLineIcon.classList.toggle("hidden", isBars);
-  ui.vizBarsIcon.classList.toggle("hidden", !isBars);
-}
-function updateNormalizeUi(){
-  const on = !!settings.get("normalizeOn");
-  ui.normalizeBtn.classList.toggle("btn-active", on);
-  ui.normalizeBtn.textContent = on ? "Normalize ON" : "Normalize OFF";
-}
-function updateEqUi(){
-  const preset = settings.get("eqPreset") || "flat";
-  if (ui.eqSelect) ui.eqSelect.value = preset;
+  ui.vizLineIcon.classList.toggle("hidden", style!=="line");
+  ui.vizBarsIcon.classList.toggle("hidden", style!=="bars");
 }
 
 // ---------------- waveform seekbar bg ----------------
@@ -624,8 +495,15 @@ function drawWaveformForCurrent(){
   }
 }
 
-// ---------------- render playlist + D&D reorder ----------------
+// ---------------- render playlist + D&D reorder + multi-select ----------------
 let dragFromIndex=null;
+let lastSelectedIndex=null;
+const selectedIndices = new Set();
+
+function clearSelection(){
+  selectedIndices.clear();
+  lastSelectedIndex=null;
+}
 
 function renderPlaylist(){
   if (!ui.playlistUl) return;
@@ -642,10 +520,13 @@ function renderPlaylist(){
 
     const li=document.createElement("li");
     li.className="playlist-item group flex items-center space-x-3 p-2 rounded-lg cursor-pointer transition-colors relative";
-    if (t.isGhost) li.classList.add("ghost");
     li.dataset.index=index;
     li.id=`track-${index}`;
 
+    // selection highlight
+    if (selectedIndices.has(index)) li.classList.add("selected");
+
+    // draggable
     li.draggable=true;
     li.addEventListener("dragstart", ()=>{ dragFromIndex=index; });
     li.addEventListener("dragover", (e)=>{ e.preventDefault(); });
@@ -664,9 +545,12 @@ function renderPlaylist(){
 
     const info=document.createElement("div");
     info.className="flex-grow min-w-0";
+    const metaLine = [t.album, t.year].filter(Boolean).join(" / ");
     info.innerHTML=`
       <p class="text-sm font-medium truncate">${t.title}</p>
-      <p class="text-xs truncate" style="color: var(--text-secondary);">${t.artist}</p>`;
+      <p class="text-xs truncate" style="color: var(--text-secondary);">${t.artist}</p>
+      ${metaLine ? `<p class="text-[10px] truncate opacity-70">${metaLine}</p>` : ""}
+    `;
     li.appendChild(info);
 
     const dur=document.createElement("span");
@@ -685,22 +569,39 @@ function renderPlaylist(){
     del.addEventListener("click",(e)=>{
       e.stopPropagation();
       playlist.removeTrack(index);
+      selectedIndices.delete(index);
       renderPlaylist();
       player.updateControls();
       if (!playlist.tracks.length) resetPlayerUI();
     });
     li.appendChild(del);
 
-    li.addEventListener("click", ()=>{
-      const curTrack = playlist.tracks[index];
-      if (curTrack.isGhost || !curTrack.file){
-        promptRelink(index);
+    li.addEventListener("click", (e)=>{
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const isShift = e.shiftKey;
+
+      // multi-select logic
+      if (isShift && lastSelectedIndex!=null){
+        const a=Math.min(lastSelectedIndex,index);
+        const b=Math.max(lastSelectedIndex,index);
+        for (let i=a;i<=b;i++) selectedIndices.add(i);
+        renderPlaylist();
         return;
       }
+      if (isCtrl){
+        if (selectedIndices.has(index)) selectedIndices.delete(index);
+        else selectedIndices.add(index);
+        lastSelectedIndex=index;
+        renderPlaylist();
+        return;
+      }
+
+      // normal click = play + clear selection
+      clearSelection();
       playlist.currentTrackIndex=index;
       player.loadTrack(index,true);
       updateMainUI(index);
-      highlightCurrentTrack();
+      renderPlaylist();
     });
 
     ui.playlistUl.appendChild(li);
@@ -712,6 +613,20 @@ function renderPlaylist(){
 // keyboard
 document.addEventListener("keydown",(e)=>{
   if (e.target===ui.playlistSearch) return;
+
+  // delete selected tracks
+  if ((e.code==="Delete" || e.code==="Backspace") && selectedIndices.size){
+    e.preventDefault();
+    const toDelete=[...selectedIndices].sort((a,b)=>b-a);
+    toDelete.forEach(i=>playlist.removeTrack(i));
+    clearSelection();
+    renderPlaylist();
+    player.updateControls();
+    if (!playlist.tracks.length) resetPlayerUI();
+    showToast("選択した曲を削除しました");
+    return;
+  }
+
   if (!playlist.tracks.length) return;
 
   if (e.code==="Space" && e.target.tagName!=="INPUT"){

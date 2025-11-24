@@ -24,10 +24,6 @@ export class PlaylistPersist {
     }catch{}
   }
 
-  getActiveName(){
-    return this.loadAll().active || "default";
-  }
-
   loadActive(){
     const all = this.loadAll();
     return all.lists[all.active] || [];
