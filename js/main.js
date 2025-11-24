@@ -68,6 +68,8 @@ const ui = {
   vizStyleBtn: document.getElementById("viz-style-btn"),
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
+  // ✅ NEW: dots スタイル用アイコンも握る
+  vizDotsIcon: document.getElementById("viz-dots-icon"),
 
   visualizerCanvas: document.getElementById("visualizer-canvas"),
 
@@ -533,10 +535,24 @@ function updateThemeIcons(){
   ui.themeSunIcon.classList.toggle("hidden", !isLight);
   ui.themeMoonIcon.classList.toggle("hidden", isLight);
 }
+
+// ✅ FIX: 3スタイル (line / bars / dots) でアイコンを切り替え
 function updateVizIcons(){
-  const style=settings.get("visualizerStyle")||"line";
-  ui.vizLineIcon.classList.toggle("hidden", style!=="line");
-  ui.vizBarsIcon.classList.toggle("hidden", style!=="bars");
+  const style = settings.get("visualizerStyle") || "line";
+
+  if (ui.vizLineIcon)
+    ui.vizLineIcon.classList.toggle("hidden", style !== "line");
+  if (ui.vizBarsIcon)
+    ui.vizBarsIcon.classList.toggle("hidden", style !== "bars");
+  if (ui.vizDotsIcon)
+    ui.vizDotsIcon.classList.toggle("hidden", style !== "dots");
+
+  // 予期しない値の場合は line にフォールバック
+  if (style !== "line" && style !== "bars" && style !== "dots") {
+    ui.vizLineIcon?.classList.remove("hidden");
+    ui.vizBarsIcon?.classList.add("hidden");
+    ui.vizDotsIcon?.classList.add("hidden");
+  }
 }
 
 // ---------------- waveform ----------------

@@ -3,16 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MP3 Player v4.4.0</title>
+  <title>MP3 Player v4.0.0-beta</title>
 
-  <!-- ✅ PWA -->
-  <link rel="manifest" href="./manifest.webmanifest">
-  <meta name="theme-color" content="#111827">
+  <!-- PWA meta (警告修正) -->
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="MP3 Player">
+  <meta name="mobile-web-app-capable" content="yes">
 
-  <!-- Tailwind CSS (dev: CDN継続。ビルド後に差し替え予定) -->
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- Google Fonts: Inter -->
@@ -22,17 +19,12 @@
   <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 
   <link rel="stylesheet" href="./css/style.css">
+  <link rel="manifest" href="./manifest.webmanifest">
 </head>
 
 <body class="min-h-screen flex items-center justify-center p-4 antialiased">
 
   <div id="player-container" class="glass-container w-full max-w-sm rounded-2xl p-6 space-y-6 transition-all duration-500">
-
-    <!-- ✅ version label (目立たない位置) -->
-    <div id="version-label"
-         class="absolute bottom-2 left-3 text-[10px] opacity-60 select-none pointer-events-none">
-      v4.4.0
-    </div>
 
     <!-- playlist open -->
     <button id="playlist-toggle-btn"
@@ -107,7 +99,6 @@
     <div class="text-center hide-on-minimal space-y-1">
       <h2 id="song-title" class="text-xl font-bold truncate">再生する曲はありません</h2>
       <p id="song-artist" class="text-sm mt-1 truncate">ファイルをロードしてください</p>
-      <p id="song-album" class="text-[11px] opacity-70 truncate"></p>
     </div>
 
     <!-- progress + waveform -->
@@ -244,10 +235,13 @@
   <div id="playlist-panel">
     <div class="flex justify-between items-center border-b pb-4 mb-4" style="border-color: rgba(255,255,255,0.3);">
       <h2 class="text-2xl font-bold">プレイリスト</h2>
+
+      <!-- ✅ SVGエラー修正済み -->
       <button id="playlist-close-btn" class="control-btn p-1">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
-          stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M618L18 6M6 6l12 12" />
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
     </div>
@@ -267,16 +261,34 @@
         </svg>
       </button>
 
+      <!-- ✅ viz 3-mode icons -->
       <button id="viz-style-btn" class="control-btn p-2" title="ビジュアライザー変更">
+        <!-- line -->
         <svg id="viz-line-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
           viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
             d="M3 15m0 0l4.5-4.5L12 15l4.5-4.5L21 15" />
         </svg>
+
+        <!-- bars -->
         <svg id="viz-bars-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none"
           viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M4 16v1m4-1v1m4-1v1m4-1v1m4-1v1M4 12v1m4-1v1m4-1v1m4-1v1m4-1v1M4 8v1m4-1v1m4-1v1m4-1v1m4-1v1M4 4v1m4-1v1m4-1v1m4-1v1m4-1v1" />
+            d="M4 16v1m4-1v1m4-1v1m4-1v1m4-1v1M4 12v1m4-1v1m4-1v1m4-1v1m4-1v1M4 8v1m4-1v1m4-1v1m4-1v1m4-1v1" />
+        </svg>
+
+        <!-- dots (new) -->
+        <svg id="viz-dots-icon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="currentColor"
+          viewBox="0 0 24 24">
+          <circle cx="6" cy="6" r="2"/>
+          <circle cx="12" cy="6" r="2"/>
+          <circle cx="18" cy="6" r="2"/>
+          <circle cx="6" cy="12" r="2"/>
+          <circle cx="12" cy="12" r="2"/>
+          <circle cx="18" cy="12" r="2"/>
+          <circle cx="6" cy="18" r="2"/>
+          <circle cx="12" cy="18" r="2"/>
+          <circle cx="18" cy="18" r="2"/>
         </svg>
       </button>
 

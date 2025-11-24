@@ -1,19 +1,20 @@
 {
   "name": "MP3 Player",
   "short_name": "MP3Player",
-  "start_url": "./index.html",
+  "start_url": "/mp3-player-new/index.html",
+  "scope": "/mp3-player-new/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#111827",
   "description": "Local MP3 Player with playlist, visualizer, and background playback.",
   "icons": [
     {
-      "src": "./assets/icons/icon-192.png",
+      "src": "/mp3-player-new/assets/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "./assets/icons/icon-512.png",
+      "src": "/mp3-player-new/assets/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
