@@ -1,38 +1,63 @@
+// js/modules/playlistPersist.js
 export class PlaylistPersist {
-  constructor(settings) {
-    this.KEY = "mp3PlayerPlaylist_v3_9_1";
-    this.settings = settings;
+  constructor(key="mp3PlayerPlaylist_v4"){
+    this.key = key;
   }
 
-  save(tracks) {
-    try {
-      const lite = tracks.map(t => ({
-        title: t.title,
-        artist: t.artist,
-        duration: t.duration,
-        // ゴースト保持のため file は保存しない
-      }));
-      localStorage.setItem(this.KEY, JSON.stringify(lite));
-    } catch {}
-  }
-
-  load() {
-    try {
-      const s = localStorage.getItem(this.KEY);
-      return s ? JSON.parse(s) : [];
-    } catch {
-      return [];
+  loadAll(){
+    try{
+      const raw = localStorage.getItem(this.key);
+      if (!raw) return { active:"default", lists:{ default:[] } };
+      const obj = JSON.parse(raw);
+      if (!obj.lists) obj.lists = { default:[] };
+      if (!obj.active) obj.active = "default";
+      if (!obj.lists[obj.active]) obj.lists[obj.active] = [];
+      return obj;
+    }catch{
+      return { active:"default", lists:{ default:[] } };
     }
   }
 
-  exportJson() {
-    const data = this.load();
-    return JSON.stringify({ version: "3.9.1", tracks: data }, null, 2);
+  saveAll(obj){
+    try{
+      localStorage.setItem(this.key, JSON.stringify(obj));
+    }catch{}
   }
 
-  importJson(json) {
-    const parsed = JSON.parse(json);
-    if (!parsed || !Array.isArray(parsed.tracks)) throw new Error("invalid");
-    localStorage.setItem(this.KEY, JSON.stringify(parsed.tracks));
+  loadActive(){
+    const all = this.loadAll();
+    return all.lists[all.active] || [];
+  }
+
+  saveActive(tracks){
+    const all = this.loadAll();
+    all.lists[all.active] = tracks;
+    this.saveAll(all);
+  }
+
+  listNames(){
+    const all = this.loadAll();
+    return Object.keys(all.lists);
+  }
+
+  setActiveName(name){
+    const all = this.loadAll();
+    if (!all.lists[name]) all.lists[name] = [];
+    all.active = name;
+    this.saveAll(all);
+  }
+
+  createList(name){
+    const all = this.loadAll();
+    if (!all.lists[name]) all.lists[name] = [];
+    this.saveAll(all);
+  }
+
+  deleteList(name){
+    const all = this.loadAll();
+    delete all.lists[name];
+    if (!all.lists.default) all.lists.default = [];
+    if (!all.lists[all.active]) all.active = "default";
+    this.saveAll(all);
   }
 }

@@ -1,19 +1,27 @@
 // js/modules/audioFx.js
+import { clamp } from "./utils.js";
+
 export default class AudioFx {
   constructor(settings){
     this.settings = settings;
-    this.ctx = null;
 
-    // A/Bなど複数audio用のノードを保持
-    // 形式: { audio, source, gain }
-    this.nodes = [];
+    this.ctx = null;
+    this.bundles = new Map(); // audioEl -> bundle
+
+    // EQ presets
+    this.eqPresets = {
+      flat:   { low:0, mid:0, high:0 },
+      bass:   { low:6, mid:0, high:-2 },
+      treble: { low:-2, mid:0, high:6 },
+      vocal:  { low:-2, mid:4, high:2 },
+    };
   }
 
   ensureContext(){
     if (!this.ctx){
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    return this.ctx; // Visualizerが使うので返す
+    return this.ctx;
   }
 
   resumeContext(){
@@ -22,129 +30,169 @@ export default class AudioFx {
     }
   }
 
+  // ✅ A/B 同時 attach できる構造に刷新（多重detach無し）
   attach(audioEl){
     if (!audioEl) return null;
-
     const ctx = this.ensureContext();
 
-    // すでに接続済みなら再利用
-    const existing = this.nodes.find(n => n.audio === audioEl);
-    if (existing){
-      return { gain: existing.gain, analyser: existing.analyser || null };
-    }
+    if (this.bundles.has(audioEl)) return this.bundles.get(audioEl);
 
-    // MediaElementSourceは audioEl につき1回だけ
     if (!audioEl.__mediaSource){
       audioEl.__mediaSource = ctx.createMediaElementSource(audioEl);
     }
+
     const source = audioEl.__mediaSource;
 
-    // gain（クロスフェード用に audioごと）
-    const gain = ctx.createGain();
-    gain.gain.value = (this.settings.get?.("volume") ?? 1);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.85;
 
-    // 配線：source → gain → speakers
-    source.connect(gain);
+    const low = ctx.createBiquadFilter();
+    low.type = "lowshelf"; low.frequency.value = 120;
+
+    const mid = ctx.createBiquadFilter();
+    mid.type = "peaking"; mid.frequency.value = 1200; mid.Q.value = 1;
+
+    const high = ctx.createBiquadFilter();
+    high.type = "highshelf"; high.frequency.value = 6000;
+
+    const gain = ctx.createGain();
+    gain.gain.value = (this.settings.get("volume") ?? 1);
+
+    // chain
+    source.connect(analyser);
+    analyser.connect(low);
+    low.connect(mid);
+    mid.connect(high);
+    high.connect(gain);
     gain.connect(ctx.destination);
 
-    const node = { audio: audioEl, source, gain, analyser: null };
-    this.nodes.push(node);
+    const bundle = { audioEl, source, analyser, low, mid, high, gain };
+    this.bundles.set(audioEl, bundle);
 
-    return { gain, analyser: null };
+    // apply EQ preset now
+    this.applyEqPresetToBundle(bundle);
+
+    return bundle;
   }
 
-  detach(audioEl){
-    const idx = this.nodes.findIndex(n => n.audio === audioEl);
-    if (idx === -1) return;
+  detach(audioEl=null){
+    if (!audioEl){
+      for (const b of this.bundles.values()) this._disconnectBundle(b);
+      this.bundles.clear();
+      return;
+    }
+    const b = this.bundles.get(audioEl);
+    if (!b) return;
+    this._disconnectBundle(b);
+    this.bundles.delete(audioEl);
+  }
 
-    const n = this.nodes[idx];
+  _disconnectBundle(b){
     try{
-      n.source?.disconnect();
-      n.gain?.disconnect();
-      n.analyser?.disconnect();
+      b.source?.disconnect();
+      b.analyser?.disconnect();
+      b.low?.disconnect();
+      b.mid?.disconnect();
+      b.high?.disconnect();
+      b.gain?.disconnect();
     }catch{}
-    this.nodes.splice(idx, 1);
   }
 
-  getGain(audioEl){
-    return this.nodes.find(n => n.audio === audioEl)?.gain ?? null;
+  getBundles(){
+    return [...this.bundles.values()];
   }
 
-  // ===========================================
-  // ★旧API互換: Playlist が呼ぶ「音量解析 → gain」
-  // ===========================================
+  get nodes(){
+    return this.getBundles();
+  }
+
+  getAnalyserFor(audioEl){
+    return this.bundles.get(audioEl)?.analyser || null;
+  }
+
+  // -------------------------
+  // Normalize / EQ
+  // -------------------------
+  applyNormalizeToCurrent(gainNode, trackGain=1){
+    const on = !!this.settings.get("normalizeOn");
+    if (!gainNode) return;
+    gainNode.gain.value = on ? clamp(trackGain, 0.25, 4) : 1;
+  }
+
+  setEqPreset(presetName){
+    this.settings.set("eqPreset", presetName);
+    this.applyEqPresetToAll();
+  }
+
+  applyEqPresetToAll(){
+    for (const b of this.bundles.values()){
+      this.applyEqPresetToBundle(b);
+    }
+  }
+
+  applyEqPresetToBundle(bundle){
+    const name = this.settings.get("eqPreset") || "flat";
+    const p = this.eqPresets[name] || this.eqPresets.flat;
+    bundle.low.gain.value = p.low;
+    bundle.mid.gain.value = p.mid;
+    bundle.high.gain.value = p.high;
+  }
+
+  toggleNormalize(){
+    const v = this.settings.toggle("normalizeOn");
+    return v;
+  }
+
+  // -------------------------
+  // Analysis (v4 beta)
+  // -------------------------
   async analyzeAndGetGain(file){
     try{
-      if (!file) return 1;
-
       const ctx = this.ensureContext();
-      const buf = await file.arrayBuffer();
-      const audioBuf = await ctx.decodeAudioData(buf.slice(0));
-
-      const ch = audioBuf.getChannelData(0);
-      let peak = 0;
-      for (let i = 0; i < ch.length; i++){
-        const v = Math.abs(ch[i]);
-        if (v > peak) peak = v;
+      const ab = await file.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(ab.slice(0));
+      const ch0 = audioBuf.getChannelData(0);
+      let sumSq = 0;
+      for (let i=0;i<ch0.length;i++){
+        const v = ch0[i];
+        sumSq += v*v;
       }
-      if (peak <= 0) return 1;
-
-      const target = 0.9;
-      const gain = target / peak;
-      return this._clamp(gain, 0.2, 2.5);
-    } catch (e){
-      console.warn("[AudioFx.analyzeAndGetGain] failed:", e);
+      const rms = Math.sqrt(sumSq / ch0.length) || 0.0001;
+      const targetRms = 0.12; // ざっくり -14LUFS 付近
+      const gain = clamp(targetRms / rms, 0.25, 4);
+      return gain;
+    }catch{
       return 1;
     }
   }
 
-  // ===========================================
-  // ★旧API互換: Playlist が呼ぶ「波形ピーク抽出」
-  // ===========================================
-  async extractWavePeaks(file, count = 200){
+  async extractWavePeaks(file, samples=900){
     try{
-      if (!file) return null;
-
       const ctx = this.ensureContext();
-      const buf = await file.arrayBuffer();
-      const audioBuf = await ctx.decodeAudioData(buf.slice(0));
+      const ab = await file.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(ab.slice(0));
+      const data = audioBuf.getChannelData(0);
+      const len = data.length;
+      const step = Math.max(1, Math.floor(len / samples));
+      const peaks = new Array(samples).fill(0);
 
-      const ch = audioBuf.getChannelData(0);
-      const peaks = new Array(count);
-
-      const blockSize = Math.floor(ch.length / count) || 1;
-
-      for (let i = 0; i < count; i++){
-        const start = i * blockSize;
-        const end = Math.min(start + blockSize, ch.length);
-
-        let max = 0;
-        for (let j = start; j < end; j++){
-          const v = Math.abs(ch[j]);
-          if (v > max) max = v;
+      for (let i=0;i<samples;i++){
+        const start = i*step;
+        const end = Math.min(start+step, len);
+        let peak = 0;
+        for (let j=start;j<end;j++){
+          const v = Math.abs(data[j]);
+          if (v>peak) peak=v;
         }
-        peaks[i] = max;
+        peaks[i] = peak;
       }
-      return peaks;
-    } catch (e){
-      console.warn("[AudioFx.extractWavePeaks] failed:", e);
+
+      // normalize 0..1
+      const max = Math.max(...peaks, 0.0001);
+      return peaks.map(p => p/max);
+    }catch{
       return null;
     }
-  }
-
-  // ===========================================
-  // PlayerCore互換（今後拡張用）
-  // ===========================================
-  applyNormalizeToCurrent(gainNode, gainValue){
-    if (!gainNode) return;
-    gainNode.gain.value = gainValue ?? 1;
-  }
-
-  applyEqPresetToAll(){ /* まだEQ未実装なら空でOK */ }
-  setEqEnabled(){ /* 拡張用 */ }
-  setNormalizeEnabled(){ /* 拡張用 */ }
-
-  _clamp(v, min, max){
-    return Math.min(Math.max(v, min), max);
   }
 }
