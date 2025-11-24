@@ -103,12 +103,14 @@ export class Playlist {
     this.save();
   }
 
+  // ✅ reorder (drag & drop)
   reorder(from, to){
     if (from===to) return;
     if (from<0 || to<0 || from>=this.tracks.length || to>=this.tracks.length) return;
     const [moved] = this.tracks.splice(from,1);
     this.tracks.splice(to,0,moved);
 
+    // currentTrackIndex 補正
     if (this.currentTrackIndex === from) this.currentTrackIndex = to;
     else {
       if (from < this.currentTrackIndex && to >= this.currentTrackIndex) this.currentTrackIndex--;
@@ -117,6 +119,9 @@ export class Playlist {
     this.save();
   }
 
+  // -----------------------
+  // addFiles (no-crash)
+  // -----------------------
   async addFiles(files, audioFx){
     const mp3s = Array.from(files).filter(isMp3File);
 
@@ -148,6 +153,7 @@ export class Playlist {
     window.dispatchEvent(new CustomEvent("playlist:metadata", { detail:{ index } }));
   }
 
+  // ✅ Artwork確実化：jsmediatags → 無い/失敗 → APIC直読み fallback
   async _readMetadata(file, index){
     const jsmediatags = window.jsmediatags;
     if (!jsmediatags){
@@ -159,9 +165,10 @@ export class Playlist {
 
     let done = false;
 
-    const finish = async (tags=null) => {
+    const finish = async (tags=null, error=false) => {
       if (done) return;
       done = true;
+
       if (!this.tracks[index]) return;
 
       const title = tags?.title || file.name;
@@ -175,6 +182,7 @@ export class Playlist {
         artworkUrl = `data:${format};base64,${btoa(base64)}`;
       }
 
+      // fallback if no artwork
       if (!artworkUrl){
         artworkUrl = await this._extractArtworkFallback(file);
       }
@@ -189,10 +197,11 @@ export class Playlist {
 
     jsmediatags.read(file, {
       onSuccess: (tag) => finish(tag.tags || {}),
-      onError: () => finish(null)
+      onError: () => finish(null, true)
     });
 
-    setTimeout(() => finish(null), 2500);
+    // safety timeout (rare hang)
+    setTimeout(() => finish(null, true), 2500);
   }
 
   _readDuration(file, index){
@@ -213,99 +222,59 @@ export class Playlist {
     }, { once:true });
   }
 
-  // ---- safe base64 helper ----
-  _bytesToBase64(bytes){
-    let binary = "";
-    const chunk = 0x8000;
-    for (let i=0; i<bytes.length; i+=chunk){
-      binary += String.fromCharCode(...bytes.subarray(i, i+chunk));
-    }
-    return btoa(binary);
-  }
-
-  // ---- APIC/PIC fallback (v2.2/2.3/2.4) ----
+  // -----------------------
+  // APIC fallback parser
+  // (small but reliable)
+  // -----------------------
   async _extractArtworkFallback(file){
     try{
-      const buf = await file.slice(0, 2*1024*1024).arrayBuffer();
+      const buf = await file.slice(0, 1024*1024).arrayBuffer();
       const bytes = new Uint8Array(buf);
 
+      // ID3 header?
       if (bytes[0]!==0x49 || bytes[1]!==0x44 || bytes[2]!==0x33) return null;
 
-      const ver = bytes[3]; // 2,3,4
-      let pos = 10;
-
-      const tagSize =
+      let pos = 10; // skip header
+      const size =
         (bytes[6]&0x7f)<<21 |
         (bytes[7]&0x7f)<<14 |
         (bytes[8]&0x7f)<<7  |
         (bytes[9]&0x7f);
 
-      const end = pos + tagSize;
+      const end = pos + size;
 
       while (pos + 10 < end){
-        if (bytes[pos]===0 && bytes[pos+1]===0 && bytes[pos+2]===0 && bytes[pos+3]===0) break;
-
-        let id = "";
-        let frameSize = 0;
-        let headerSize = 10;
-
-        if (ver === 2){
-          id = String.fromCharCode(bytes[pos],bytes[pos+1],bytes[pos+2]);
-          frameSize = (bytes[pos+3]<<16)|(bytes[pos+4]<<8)|bytes[pos+5];
-          headerSize = 6;
-        } else {
-          id = String.fromCharCode(bytes[pos],bytes[pos+1],bytes[pos+2],bytes[pos+3]);
-
-          if (ver === 4){
-            frameSize =
-              (bytes[pos+4]&0x7f)<<21 |
-              (bytes[pos+5]&0x7f)<<14 |
-              (bytes[pos+6]&0x7f)<<7  |
-              (bytes[pos+7]&0x7f);
-          } else {
-            frameSize =
-              (bytes[pos+4]<<24)|(bytes[pos+5]<<16)|(bytes[pos+6]<<8)|bytes[pos+7];
-          }
-        }
-
+        const id = String.fromCharCode(bytes[pos],bytes[pos+1],bytes[pos+2],bytes[pos+3]);
+        const frameSize =
+          (bytes[pos+4]<<24)|(bytes[pos+5]<<16)|(bytes[pos+6]<<8)|bytes[pos+7];
         if (!id.trim() || frameSize<=0) break;
 
-        const want = (ver===2 ? "PIC" : "APIC");
-        if (id === want){
-          const frame = bytes.slice(pos+headerSize, pos+headerSize+frameSize);
+        if (id==="APIC"){
+          const frame = bytes.slice(pos+10, pos+10+frameSize);
           let i=0;
 
-          const encoding = frame[i++];
-
-          let mime = "image/jpeg";
-          if (ver===2){
-            const fmt = String.fromCharCode(frame[i],frame[i+1],frame[i+2]).toLowerCase();
-            i+=3;
-            mime = fmt.includes("png") ? "image/png" : "image/jpeg";
-          } else {
-            mime = "";
-            while (frame[i]!==0){ mime += String.fromCharCode(frame[i++]); }
-            i++;
-          }
-
+          const encoding = frame[i++]; // ignore
+          let mime="";
+          while (frame[i]!==0){ mime += String.fromCharCode(frame[i++]); }
+          i++; // null
           i++; // pictureType
 
+          // description (null-terminated)
           if (encoding===0 || encoding===3){
-            while (frame[i]!==0 && i<frame.length) i++;
+            while (frame[i]!==0) i++;
             i++;
-          } else {
-            while (!(frame[i]===0 && frame[i+1]===0) && i<frame.length-1) i++;
+          }else{
+            while (!(frame[i]===0 && frame[i+1]===0)) i++;
             i+=2;
           }
 
           const imgData = frame.slice(i);
-          if (!imgData.length) return null;
-
-          const b64 = this._bytesToBase64(imgData);
-          return `data:${mime||"image/jpeg"};base64,${b64}`;
+          const b64 = btoa(String.fromCharCode(...imgData));
+          const fmt = mime || "image/jpeg";
+          return `data:${fmt};base64,${b64}`;
         }
 
-        pos += headerSize + frameSize;
+        pos += 10 + frameSize;
       }
 
       return null;

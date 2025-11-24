@@ -16,5 +16,6 @@ export function isMp3File(file){
 }
 
 export function easeInOutCos(t){
+  // 0→1 を自然なクロスフェード曲線に
   return 0.5 - 0.5 * Math.cos(Math.PI * clamp(t,0,1));
 }

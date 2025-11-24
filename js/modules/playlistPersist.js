@@ -14,7 +14,6 @@ export class PlaylistPersist {
       if (!obj.lists[obj.active]) obj.lists[obj.active] = [];
       return obj;
     }catch{
-      // 破損復旧
       return { active:"default", lists:{ default:[] } };
     }
   }

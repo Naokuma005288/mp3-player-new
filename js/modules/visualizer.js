@@ -10,12 +10,6 @@ export class Visualizer {
     this.data = null;
     this.FFT = 512;
     this.ready = false;
-
-    this.connectedGains = new WeakSet();
-
-    window.addEventListener("audiofx:attach", () => {
-      this._connectNewBundles();
-    });
   }
 
   _ensureAnalyser(){
@@ -27,23 +21,14 @@ export class Visualizer {
     this.analyser.smoothingTimeConstant = 0.85;
     this.data = new Uint8Array(this.analyser.frequencyBinCount);
 
-    this._connectNewBundles();
+    // mix both bundles → visual analyser
+    this.audioFx.getBundles().forEach(b => {
+      try{ b.gain.connect(this.analyser); }catch{}
+    });
 
     this._resize();
     window.addEventListener("resize", () => this._resize());
     this.ready = true;
-  }
-
-  _connectNewBundles(){
-    if (!this.analyser) return;
-    this.audioFx.getBundles().forEach(b => {
-      try{
-        if (b?.gain && !this.connectedGains.has(b.gain)){
-          b.gain.connect(this.analyser);
-          this.connectedGains.add(b.gain);
-        }
-      }catch{}
-    });
   }
 
   _resize(){
