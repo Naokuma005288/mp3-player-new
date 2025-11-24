@@ -1,0 +1,189 @@
+/* css/animations.css v4.4.5 Animation Pack */
+
+/* ---------------------------------------
+   Reduced motion support
+---------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------------------------------------
+   Player container state
+---------------------------------------- */
+#player-container {
+  transition: transform 0.6s cubic-bezier(0.2, 0.9, 0.2, 1),
+              box-shadow 0.6s cubic-bezier(0.2, 0.9, 0.2, 1);
+  will-change: transform;
+}
+
+#player-container.is-playing {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+}
+
+/* ---------------------------------------
+   Album art: Breath + Crossfade flash
+---------------------------------------- */
+#drop-zone {
+  transition: transform 0.8s cubic-bezier(0.2, 0.9, 0.2, 1),
+              filter 0.8s ease;
+  will-change: transform, filter;
+}
+
+#player-container.is-playing #drop-zone {
+  transform: scale(1.01);
+}
+
+#album-art {
+  transition: transform 1.2s ease, filter 1.2s ease, opacity 0.6s ease;
+  will-change: transform, filter, opacity;
+}
+
+@keyframes albumBreath {
+  0%   { transform: scale(1.00); filter: saturate(1.0) contrast(1.0); }
+  50%  { transform: scale(1.035); filter: saturate(1.15) contrast(1.05); }
+  100% { transform: scale(1.00); filter: saturate(1.0) contrast(1.0); }
+}
+
+#player-container.is-playing #album-art {
+  animation: albumBreath 6.5s ease-in-out infinite;
+}
+
+/* flash on track change */
+@keyframes artFlash {
+  0%   { filter: blur(10px) brightness(1.35); transform: scale(1.06); opacity: 0.6; }
+  60%  { filter: blur(2px)  brightness(1.1);  transform: scale(1.02); opacity: 0.9; }
+  100% { filter: blur(0)    brightness(1.0);  transform: scale(1.0);  opacity: 1.0; }
+}
+
+#album-art.art-flash {
+  animation: artFlash 520ms cubic-bezier(0.2, 0.9, 0.2, 1) 1;
+}
+
+/* ---------------------------------------
+   Play/Pause button pulse
+---------------------------------------- */
+@keyframes playPulse {
+  0%   { transform: scale(1.0);   box-shadow: 0 0 0 0 rgba(236,72,153,0.35); }
+  70%  { transform: scale(1.05);  box-shadow: 0 0 0 14px rgba(236,72,153,0); }
+  100% { transform: scale(1.0);   box-shadow: 0 0 0 0 rgba(236,72,153,0); }
+}
+
+#player-container.is-playing #play-pause-btn {
+  animation: playPulse 2.8s ease-out infinite;
+}
+
+/* ---------------------------------------
+   Visualizer fade + style change flash
+---------------------------------------- */
+#visualizer-canvas {
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  will-change: opacity, transform;
+}
+
+#player-container.is-playing #visualizer-canvas {
+  opacity: 1;
+}
+
+#player-container:not(.is-playing) #visualizer-canvas {
+  opacity: 0.75;
+}
+
+@keyframes vizStyleFlash {
+  0%   { opacity: 0.0; transform: translateY(6px) scale(0.98); }
+  40%  { opacity: 1.0; transform: translateY(0)   scale(1.0);  }
+  100% { opacity: 1.0; transform: translateY(0)   scale(1.0);  }
+}
+
+#visualizer-canvas.viz-style-flash {
+  animation: vizStyleFlash 260ms ease-out 1;
+}
+
+/* ---------------------------------------
+   Playlist panel open/close
+---------------------------------------- */
+#playlist-panel {
+  transition: transform 0.55s cubic-bezier(0.18, 0.9, 0.22, 1),
+              opacity 0.55s ease,
+              background-color 0.55s ease;
+  opacity: 0.0;
+  will-change: transform, opacity;
+}
+
+#playlist-panel.open {
+  opacity: 1.0;
+}
+
+/* ---------------------------------------
+   Playlist items enter stagger
+---------------------------------------- */
+@keyframes listEnter {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+.playlist-item.enter-animate {
+  animation: listEnter 420ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+/* selected multi items */
+.playlist-item.selected {
+  background-color: var(--playlist-item-hover);
+  outline: 2px solid var(--playlist-ring);
+  outline-offset: 0;
+}
+
+/* current playing item glow pulse */
+@keyframes activeGlow {
+  0%   { box-shadow: 0 0 0 0 rgba(236,72,153,0.0); }
+  50%  { box-shadow: 0 0 0 3px rgba(236,72,153,0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(236,72,153,0.0); }
+}
+
+.playlist-item.active {
+  animation: activeGlow 2.2s ease-in-out infinite;
+}
+
+/* ---------------------------------------
+   Waveform fade
+---------------------------------------- */
+#wave-canvas {
+  transition: opacity 0.5s ease;
+}
+
+#player-container.is-playing #wave-canvas {
+  opacity: 0.55;
+}
+
+#player-container:not(.is-playing) #wave-canvas {
+  opacity: 0.28;
+}
+
+/* ---------------------------------------
+   Toast pop refine
+---------------------------------------- */
+@keyframes toastPop {
+  0%   { transform: translateX(-50%) translateY(10px) scale(0.98); opacity: 0; }
+  40%  { transform: translateX(-50%) translateY(0)    scale(1.02); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(0)    scale(1);    opacity: 1; }
+}
+#toast.show {
+  animation: toastPop 260ms ease-out 1;
+}
+
+/* ---------------------------------------
+   Minimal mode paused overlay pulse (P2)
+---------------------------------------- */
+@keyframes minimalPausePulse {
+  0%   { transform: scale(1);   opacity: 0.75; }
+  50%  { transform: scale(1.06);opacity: 1.0;  }
+  100% { transform: scale(1);   opacity: 0.75; }
+}
+
+#player-container.minimal.is-paused #minimal-play-btn-overlay {
+  animation: minimalPausePulse 1.8s ease-in-out infinite;
+}

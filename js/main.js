@@ -1,4 +1,4 @@
-// js/main.js v4.4.0 full
+// js/main.js v4.4.5 full (Animation Update)
 import { Settings } from "./modules/settings.js";
 import { Visualizer } from "./modules/visualizer.js";
 import { Playlist } from "./modules/playlist.js";
@@ -7,7 +7,7 @@ import AudioFx from "./modules/audioFx.js";
 import { PlaylistPersist } from "./modules/playlistPersist.js";
 import { formatTime, isMp3File } from "./modules/utils.js";
 
-const APP_VERSION = "v4.4.0";
+const APP_VERSION = "v4.4.5";
 
 // ---------------- UI ----------------
 const ui = {
@@ -68,7 +68,6 @@ const ui = {
   vizStyleBtn: document.getElementById("viz-style-btn"),
   vizLineIcon: document.getElementById("viz-line-icon"),
   vizBarsIcon: document.getElementById("viz-bars-icon"),
-  // ✅ NEW: dots スタイル用アイコンも握る
   vizDotsIcon: document.getElementById("viz-dots-icon"),
 
   visualizerCanvas: document.getElementById("visualizer-canvas"),
@@ -81,10 +80,17 @@ const ui = {
   versionLabel: document.getElementById("version-label"),
 };
 
-// ✅ FIX: selectedIndices を renderPlaylist より前に初期化する
+// ✅ D&D / multi-select state
 let dragFromIndex = null;
 const selectedIndices = new Set();
 let lastSelectedIndex = null;
+
+// ✅ Playlist stagger suppress (P1)
+let suppressPlaylistEnter = false;
+function suppressPlaylistEnterOnce(){
+  suppressPlaylistEnter = true;
+  requestAnimationFrame(()=>{ suppressPlaylistEnter = false; });
+}
 
 // バージョン表示
 if (ui.splashVersion) ui.splashVersion.textContent = APP_VERSION;
@@ -182,14 +188,42 @@ async function requestWakeLock(){
   }catch{}
 }
 async function releaseWakeLock(){
-  try{ await wakeLock?.release(); }catch{}
-  wakeLock = null;
+    try{ await wakeLock?.release(); }catch{}
+    wakeLock = null;
 }
 document.addEventListener("visibilitychange", ()=>{
   if (document.visibilityState === "visible" && wakeLock && !player.getActiveAudio().paused){
     requestWakeLock();
   }
 });
+
+// ---------------- Animation helpers (P0/P2) ----------------
+function setPlayingContainerClass(isPlaying){
+  if (!ui.playerContainer) return;
+  ui.playerContainer.classList.toggle("is-playing", isPlaying);
+  ui.playerContainer.classList.toggle("is-paused", !isPlaying);
+}
+
+function flashAlbumArt(){
+  if (!ui.albumArt) return;
+  ui.albumArt.classList.remove("art-flash");
+  // reflow to restart animation
+  void ui.albumArt.offsetWidth;
+  ui.albumArt.classList.add("art-flash");
+  ui.albumArt.addEventListener("animationend", ()=>{
+    ui.albumArt.classList.remove("art-flash");
+  }, { once:true });
+}
+
+function triggerVizStyleTransition(){
+  if (!ui.visualizerCanvas) return;
+  ui.visualizerCanvas.classList.remove("viz-style-flash");
+  void ui.visualizerCanvas.offsetWidth;
+  ui.visualizerCanvas.classList.add("viz-style-flash");
+  ui.visualizerCanvas.addEventListener("animationend", ()=>{
+    ui.visualizerCanvas.classList.remove("viz-style-flash");
+  }, { once:true });
+}
 
 // ---------------- init load ----------------
 playlist.reloadFromPersist();
@@ -202,10 +236,12 @@ updateRepeatIcons();
 updateShuffleUi();
 updatePlaybackRateUi();
 drawWaveformForCurrent();
+setPlayingContainerClass(false);
 
 // metadata update event
 window.addEventListener("playlist:metadata", (e)=>{
   const idx=e.detail?.index;
+  suppressPlaylistEnterOnce();
   renderPlaylist();
   if (idx===playlist.currentTrackIndex){
     updateMainUI(idx);
@@ -267,6 +303,7 @@ async function handleFiles(files){
       updateMainUI(first);
       drawWaveformForCurrent();
       updateMediaMetadata(first);
+      flashAlbumArt();
     }
   }
 
@@ -352,6 +389,7 @@ ui.playlistCloseBtn?.addEventListener("click",togglePlaylist);
 
 ui.playlistSearch?.addEventListener("input",(e)=>{
   playlist.setFilter(e.target.value);
+  suppressPlaylistEnterOnce();
   renderPlaylist();
 });
 
@@ -359,6 +397,7 @@ ui.clearPlaylistBtn?.addEventListener("click", ()=>{
   player.stop();
   playlist.clearAll();
   selectedIndices.clear();
+  suppressPlaylistEnterOnce();
   renderPlaylist();
   resetPlayerUI();
   player.updateControls();
@@ -382,11 +421,12 @@ function applyTheme(mode){
 }
 applyTheme(settings.get("theme")||"normal");
 
-// viz
+// viz (3-mode + smooth flash) P2
 ui.vizStyleBtn?.addEventListener("click", ()=>{
   const cur=settings.get("visualizerStyle")||"line";
   const next=cur==="line" ? "bars" : (cur==="bars" ? "dots" : "line");
   settings.set("visualizerStyle", next);
+  triggerVizStyleTransition();
   updateVizIcons();
 });
 
@@ -408,20 +448,27 @@ player.on("playstate",(isPaused)=>{
   updateMinimalOverlay(isPaused);
   highlightCurrentTrack();
 
-  if (!isPaused) requestWakeLock();
+  const isPlaying = !isPaused;
+  setPlayingContainerClass(isPlaying);
+
+  if (isPlaying) requestWakeLock();
   else releaseWakeLock();
 
   if (canMediaSession()){
     navigator.mediaSession.playbackState = isPaused ? "paused" : "playing";
   }
 });
+
 player.on("trackchange",(idx)=>{
   updateMainUI(idx);
   highlightCurrentTrack();
   setDuration();
   drawWaveformForCurrent();
   updateMediaMetadata(idx);
+
+  flashAlbumArt(); // P0 crossfade flash
 });
+
 player.on("time",({currentTime,duration})=>{
   updateProgress(currentTime,duration);
   updateMediaPosition();
@@ -482,6 +529,7 @@ function resetPlayerUI(){
   ui.durationDisplay.textContent="0:00";
   ui.progressBar.value=0;
   updatePlayPauseIcon(true);
+  setPlayingContainerClass(false);
 }
 
 function updateProgress(currentTime,duration){
@@ -536,23 +584,12 @@ function updateThemeIcons(){
   ui.themeMoonIcon.classList.toggle("hidden", isLight);
 }
 
-// ✅ FIX: 3スタイル (line / bars / dots) でアイコンを切り替え
+// ✅ line / bars / dots 全対応（dotsボタン出ないバグもここで完全解消）
 function updateVizIcons(){
-  const style = settings.get("visualizerStyle") || "line";
-
-  if (ui.vizLineIcon)
-    ui.vizLineIcon.classList.toggle("hidden", style !== "line");
-  if (ui.vizBarsIcon)
-    ui.vizBarsIcon.classList.toggle("hidden", style !== "bars");
-  if (ui.vizDotsIcon)
-    ui.vizDotsIcon.classList.toggle("hidden", style !== "dots");
-
-  // 予期しない値の場合は line にフォールバック
-  if (style !== "line" && style !== "bars" && style !== "dots") {
-    ui.vizLineIcon?.classList.remove("hidden");
-    ui.vizBarsIcon?.classList.add("hidden");
-    ui.vizDotsIcon?.classList.add("hidden");
-  }
+  const style=settings.get("visualizerStyle")||"line";
+  ui.vizLineIcon?.classList.toggle("hidden", style!=="line");
+  ui.vizBarsIcon?.classList.toggle("hidden", style!=="bars");
+  ui.vizDotsIcon?.classList.toggle("hidden", style!=="dots");
 }
 
 // ---------------- waveform ----------------
@@ -589,7 +626,7 @@ function drawWaveformForCurrent(){
   }
 }
 
-// ---------------- render playlist + multi-select ----------------
+// ---------------- render playlist + multi-select + stagger ----------------
 function clearSelection(){
   selectedIndices.clear();
   lastSelectedIndex=null;
@@ -605,6 +642,8 @@ function renderPlaylist(){
   }
 
   const indices=playlist.getVisibleIndices();
+  let order=0;
+
   indices.forEach((index)=>{
     const t=playlist.tracks[index];
 
@@ -614,6 +653,13 @@ function renderPlaylist(){
     li.id=`track-${index}`;
 
     if (selectedIndices.has(index)) li.classList.add("selected");
+
+    // P1 stagger enter (only when not suppressed)
+    if (!suppressPlaylistEnter){
+      li.classList.add("enter-animate");
+      li.style.setProperty("--enter-delay", `${order*35}ms`);
+    }
+    order++;
 
     li.draggable=true;
     li.addEventListener("dragstart", ()=>{ dragFromIndex=index; });
@@ -658,6 +704,7 @@ function renderPlaylist(){
       e.stopPropagation();
       playlist.removeTrack(index);
       selectedIndices.delete(index);
+      suppressPlaylistEnterOnce();
       renderPlaylist();
       player.updateControls();
       if (!playlist.tracks.length) resetPlayerUI();
@@ -672,13 +719,16 @@ function renderPlaylist(){
         const a=Math.min(lastSelectedIndex,index);
         const b=Math.max(lastSelectedIndex,index);
         for (let i=a;i<=b;i++) selectedIndices.add(i);
+        suppressPlaylistEnterOnce();
         renderPlaylist();
         return;
       }
+
       if (isCtrl){
         if (selectedIndices.has(index)) selectedIndices.delete(index);
         else selectedIndices.add(index);
         lastSelectedIndex=index;
+        suppressPlaylistEnterOnce();
         renderPlaylist();
         return;
       }
@@ -688,6 +738,7 @@ function renderPlaylist(){
       player.loadTrack(index,true);
       updateMainUI(index);
       updateMediaMetadata(index);
+      suppressPlaylistEnterOnce();
       renderPlaylist();
     });
 
@@ -706,6 +757,7 @@ document.addEventListener("keydown",(e)=>{
     const toDelete=[...selectedIndices].sort((a,b)=>b-a);
     toDelete.forEach(i=>playlist.removeTrack(i));
     clearSelection();
+    suppressPlaylistEnterOnce();
     renderPlaylist();
     player.updateControls();
     if (!playlist.tracks.length) resetPlayerUI();
